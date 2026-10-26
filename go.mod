@@ -1,5 +1,3 @@
-module github.com/scrap-heap/backend
+module scrapheap
 
-go 1.23
-
-require github.com/coder/websocket v1.8.15
+go 1.22

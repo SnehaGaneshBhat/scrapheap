@@ -1,48 +1,23 @@
-# Scrap Heap backend
+# Scrap Heap
 
-Go backend for the Scrap Heap distributed Mandelbrot renderer. The coordinator
-provides a worker WebSocket endpoint, run/job/tile APIs, and static file serving.
-The browser worker and dashboard UI are maintained separately.
+Scrap Heap is a Go coordinator and native worker pool for running independent tasks across laptops.
 
-## Requirements
+## Quick start
 
-- Go 1.22 or newer
-- Windows PowerShell
+Build:
 
-## Build and verify
-
-```powershell
-go fmt ./...
-go vet ./...
+```sh
 go build ./...
-go test ./...
 ```
 
-## Worker contract
+Run the server:
 
-Workers connect to /ws/worker; the dashboard connects to /ws/dash. The shared
-contract defines 48-byte TASK and 20-byte RESULT headers, row-major RGBA output,
-job lifecycle behavior, and the `process_tile` kernel signature. See
-[docs/protocol.md](docs/protocol.md) for field offsets, pixel mapping, and the
-fixed benchmark parameters.
-
-## Run the coordinator (Windows PowerShell)
-
-```powershell
-go run ./cmd/server -addr :8080 -web web -autostart=true -mode aware
+```sh
+go run ./cmd/server
 ```
 
-Use `-autostart=false` to wait for `POST /api/run-again`. The server prints LAN
-worker and dashboard URLs at startup. `GET /api/job` reports progress;
-`GET /api/tile/{taskId}` returns an accepted tile's raw RGBA bytes.
+Run a worker:
 
-## Run mock devices
-
-In another PowerShell window:
-
-```powershell
-go run ./cmd/mockworker -url ws://localhost:8080/ws/worker -devices 3 -threads 2 -tiles-per-sec 20
+```sh
+go run ./cmd/worker
 ```
-
-Optional mock-worker flags include `-jitter 0.2`, `-kill-after 3s`, and
-`-name phone`.

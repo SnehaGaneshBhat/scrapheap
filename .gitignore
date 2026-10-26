@@ -1,1 +1,5 @@
-bench/out/
+# Ignore compiled binaries and dataset files
+/scrapheap-server
+/scrapheap-worker
+*.exe
+data/
