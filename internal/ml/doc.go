@@ -1,9 +1,9 @@
 // Package ml provides deterministic, pure-Go MNIST training.
 //
-// Training and evaluation use a package-owned SplitMix64 PRNG, fixed dataset
-// splits, single-threaded float64 arithmetic, and package-provided exp and log
-// approximations. Calculations must avoid architecture-dependent math
-// intrinsics and map iteration. Dataset contents are verified by SHA-256 before
-// use. Ordinary training reports validation metrics only; test data is reserved
-// for final evaluation.
+// Training uses a package-owned SplitMix64 PRNG, fixed dataset splits,
+// single-threaded float64 arithmetic, and package-provided exp and log
+// approximations. Calculations avoid architecture-dependent math intrinsics
+// and map iteration. Dataset contents are verified by SHA-256 before use.
+// Ordinary training reports validation metrics only; test data is reserved for
+// final evaluation.
 package ml
