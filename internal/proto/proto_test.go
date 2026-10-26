@@ -13,7 +13,7 @@ func TestRoundTripMessages(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"hello request", HelloRequest{Name: "laptop-01", CPU: "Intel Core i7-12700H", Cores: 14, Threads: 20, OS: "windows/amd64", Version: "dev"}},
+		{"hello request", HelloRequest{Name: "laptop-01", Cores: 8, Threads: 7, Browser: "Chrome 130"}},
 		{"hello response", HelloResponse{WorkerID: "worker-01", LeaseSec: 30, HeartbeatSec: 10, JobKind: TaskKindMnist, Dataset: []DatasetFile{{File: "train-images-idx3-ubyte.gz", SHA256: "abc", Size: 9912422}}}},
 		{"pull request", PullRequest{WorkerID: "worker-01"}},
 		{"task response", TaskResponse{Status: PullStatusTask, TaskID: "task-0001", Kind: TaskKindBurn, Payload: json.RawMessage(`{"iters":1000000}`), LeaseDeadlineUnixMs: 1793030400000, Attempt: 1}},
@@ -27,12 +27,12 @@ func TestRoundTripMessages(t *testing.T) {
 		{"burn result", BurnResult{Checksum: "18446744073709551615"}},
 		{"MNIST config", config},
 		{"MNIST result", MnistResult{ValAcc: 0.97, ValLoss: 0.12, TrainSec: 8.43}},
-		{"worker info", WorkerInfo{ID: "worker-01", CPU: "Intel Core i7-12700H", Cores: 14, Threads: 20, TasksDone: 10, Speed: 0.083, Status: WorkerStatusActive}},
+		{"worker info", WorkerInfo{ID: "worker-01", Browser: "Chrome 130", Cores: 8, Threads: 7, TasksDone: 10, Speed: 0.083, Status: WorkerStatusActive}},
 		{"leaderboard entry", LeaderboardEntry{Config: config, ValAcc: 0.97}},
 		{"verification stats", VerifyStats{Sampled: 3, Matched: 2, Mismatched: 1}},
 		{"baseline info", BaselineInfo{Seconds: 12.4, Label: "single-worker"}},
 		{"best result", BestResult{Config: config, ValAcc: 0.97}},
-		{"job snapshot", JobSnapshot{JobID: "mnist-search-01", State: JobStateRunning, Total: 360, Done: 42, InFlight: 8, Requeued: 2, ElapsedSec: 120.5, ETASec: 900, Workers: []WorkerInfo{{ID: "worker-01", CPU: "Intel Core i7-12700H", Cores: 14, Threads: 20, TasksDone: 10, Speed: 0.083, Status: WorkerStatusActive}}, Leaderboard: []LeaderboardEntry{{Config: config, ValAcc: 0.97}}, Verify: VerifyStats{Sampled: 3, Matched: 2, Mismatched: 1}, Baseline: BaselineInfo{Seconds: 12.4, Label: "single-worker"}, Best: BestResult{Config: config, ValAcc: 0.97}}},
+		{"job snapshot", JobSnapshot{JobID: "mnist-search-01", State: JobStateRunning, Total: 360, Done: 42, InFlight: 8, Requeued: 2, ElapsedSec: 120.5, ETASec: 900, Workers: []WorkerInfo{{ID: "worker-01", Browser: "Chrome 130", Cores: 8, Threads: 7, TasksDone: 10, Speed: 0.083, Status: WorkerStatusActive}}, Leaderboard: []LeaderboardEntry{{Config: config, ValAcc: 0.97}}, Verify: VerifyStats{Sampled: 3, Matched: 2, Mismatched: 1}, Baseline: BaselineInfo{Seconds: 12.4, Label: "single-worker"}, Best: &BestResult{Config: config, ValAcc: 0.97}}},
 		{"API result response", APIResultResponse{Ready: false}},
 		{"error response", ErrorResponse{Error: "unexpected end of JSON input"}},
 	}

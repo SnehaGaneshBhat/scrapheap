@@ -26,11 +26,9 @@ const (
 
 type HelloRequest struct {
 	Name    string `json:"name"`
-	CPU     string `json:"cpu"`
 	Cores   int    `json:"cores"`
 	Threads int    `json:"threads"`
-	OS      string `json:"os"`
-	Version string `json:"version"`
+	Browser string `json:"browser"`
 }
 
 type DatasetFile struct {
@@ -103,7 +101,7 @@ type BurnResult struct {
 
 type WorkerInfo struct {
 	ID        string  `json:"id"`
-	CPU       string  `json:"cpu"`
+	Browser   string  `json:"browser"`
 	Cores     int     `json:"cores"`
 	Threads   int     `json:"threads"`
 	TasksDone int     `json:"tasksDone"`
@@ -145,7 +143,7 @@ type JobSnapshot struct {
 	Leaderboard []LeaderboardEntry `json:"leaderboard"`
 	Verify      VerifyStats        `json:"verify"`
 	Baseline    BaselineInfo       `json:"baseline"`
-	Best        BestResult         `json:"best"`
+	Best        *BestResult        `json:"best"`
 }
 
 type APIResultResponse struct {

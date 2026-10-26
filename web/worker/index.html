@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scrap Heap worker</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { max-width: 48rem; margin: 3rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: .25rem; }
+    .muted { opacity: .72; }
+    form { display: grid; grid-template-columns: 1fr 10rem auto; gap: .75rem; align-items: end; margin: 2rem 0; }
+    label { display: grid; gap: .3rem; }
+    input, button { box-sizing: border-box; min-height: 2.6rem; padding: .45rem .7rem; font: inherit; }
+    button { cursor: pointer; }
+    #status { padding: 1rem; border: 1px solid #8888; border-radius: .5rem; min-height: 3rem; }
+    #events { padding-left: 1.25rem; }
+    @media (max-width: 38rem) { form { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>Scrap Heap worker</h1>
+  <p class="muted">Keep this tab open while it contributes CPU time to the coordinator.</p>
+
+  <form id="join-form">
+    <label>Worker name
+      <input id="worker-name" name="name" required maxlength="80" autocomplete="off">
+    </label>
+    <label>Threads
+      <input id="thread-count" name="threads" type="number" min="1" step="1" required>
+    </label>
+    <button id="join-button" type="submit">Join job</button>
+  </form>
+
+  <p id="status" role="status" aria-live="polite">Not connected.</p>
+  <p id="visibility" class="muted"></p>
+  <h2>Recent activity</h2>
+  <ul id="events" aria-live="polite"></ul>
+  <script src="/worker/dataset.js" defer></script>
+  <script src="/worker/worker.js" defer></script>
+</body>
+</html>

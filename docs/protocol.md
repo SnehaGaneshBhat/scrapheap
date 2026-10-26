@@ -1,6 +1,6 @@
-# Scrap Heap worker protocol and API
+# Scrap Heap browser worker protocol and API
 
-Version 1 uses plain HTTP and JSON on one coordinator port, defaulting to `:8080`. Worker endpoints use `Content-Type: application/json` and return JSON. There is no authentication in v1; use only on a trusted LAN. JSON examples below are UTF-8.
+The Version 3 plan uses browser tabs as workers and loads the trainer from `/trainer.wasm`. The coordinator uses plain HTTP and JSON on one port, defaulting to `:8080`. Worker endpoints use `Content-Type: application/json` and return JSON. There is no authentication; use only on a trusted LAN. JSON examples below are UTF-8.
 
 ## Worker endpoints
 
@@ -8,18 +8,16 @@ All worker calls are `POST` requests with a JSON object body and a JSON object r
 
 ### `POST /w/hello`
 
-Registers a worker or reconnects a worker identified by its name.
+Registers a browser tab or reconnects a worker identified by its name. A worker represents one laptop tab; its `threads` value is the number of task threads the page will run.
 
-Request fields: `name`, `cpu`, `cores`, `threads`, `os`, and `version` are strings except `cores` and `threads`, which are integers.
+Request fields: `name` and `browser` are strings; `cores` and `threads` are integers. `browser` identifies the browser and version reported by the page.
 
 ```json
 {
   "name": "laptop-01",
-  "cpu": "Intel Core i7-12700H",
-  "cores": 14,
-  "threads": 20,
-  "os": "windows/amd64",
-  "version": "dev"
+  "cores": 8,
+  "threads": 7,
+  "browser": "Chrome 130"
 }
 ```
 
@@ -152,7 +150,7 @@ Reply when the worker ID is unknown:
 }
 ```
 
-`unknownWorker: true` tells the worker to call `/w/hello` again. A heartbeat extends leases only for listed tasks held by that worker.
+`unknownWorker: true` tells the worker to call `/w/hello` again. A heartbeat extends leases only for listed tasks held by that worker; other leases are not extended.
 
 ## Task kinds
 
@@ -163,16 +161,18 @@ Workers execute built-in task kinds. Code is never sent over the network.
 Payload:
 
 ```json
-{"iters": 1000000}
+{"iters": 0}
 ```
 
 Result:
 
 ```json
-{"checksum": "18446744073709551615"}
+{"checksum": "14695981039346656037"}
 ```
 
-The unsigned 64-bit checksum is encoded as a decimal JSON string to preserve its full range.
+`iters` is a non-negative integer. Starting from `h = 14695981039346656037`, for each integer `i` from `0` to `iters - 1`, update `h = ((h XOR i) * 1099511628211) mod 2^64`. The unsigned 64-bit result is encoded as a decimal JSON string. The browser worker uses `BigInt` for the same recurrence.
+
+The browser worker runs this test workload in JavaScript inside Web Workers so the full pull/lease/recovery path can be exercised before the MNIST trainer ABI is ready. This does not send code from the coordinator: the executor is built into the worker page. `mnist` assignments are reported as unsupported by this worker version and are left for lease recovery; use `burn` until the trainer and dataset loader are integrated.
 
 ### `mnist`
 
@@ -200,11 +200,19 @@ Result:
 
 The MNIST payload and result are proposals pending P2 sign-off.
 
+## Sampled verification
+
+The coordinator may reissue a sampled task to verify its first accepted result. The reissued assignment keeps the same `taskId` and payload and has a higher `attempt`; workers execute each assignment they receive as usual. A task selected for verification is assigned only to a worker ID different from the worker that returned the first result. If only that original worker is available, pulls wait until another worker can take it.
+
+The coordinator selects samples deterministically from the FNV-1a hash of the task ID and the configured `-verify-rate`. The current server default is `0.1` (10 percent); this is an adjustable initial policy, not a measured optimum. The first result is passed to the reducer. Verification compares the second result through the job's `SampleVerifier`; it does not replace the accepted result. A mismatch increments `verify.mismatched` and is visible in the job snapshot. The job is not done until all selected verification runs finish.
+
+For the burn job, results are compared by their decoded `checksum` value, so JSON whitespace does not affect a match. A stale result from an earlier attempt is rejected with `accepted: false` and `reason: "stale"`.
+
 ## Other endpoints
 
 ### `GET /api/job`
 
-Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, and `mismatched`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
+Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `browser`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, and `mismatched`. `baseline` has `seconds` and `label`. `best` is `null` until a result exists, then has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, browser, and label are strings; config values are JSON objects.
 
 ```json
 {
@@ -219,9 +227,9 @@ Returns a live job snapshot. The object has exactly these top-level fields: `job
   "workers": [
     {
       "id": "worker-01",
-      "cpu": "Intel Core i7-12700H",
-      "cores": 14,
-      "threads": 20,
+      "browser": "Chrome 130",
+      "cores": 8,
+      "threads": 7,
       "tasksDone": 10,
       "speed": 0.083,
       "status": "active"
@@ -250,28 +258,32 @@ Before completion, returns:
 {"ready": false}
 ```
 
-The design specifies that this endpoint returns the final result, but does not define the JSON shape of its `ready: true` response. That shape must be agreed before implementing or consuming it; this document does not add fields to the contract.
+When the job is done, the endpoint currently returns HTTP 501 with an `error` string because the final result schema has not been defined. Agree on that schema before implementing the ready response; this document does not invent its fields.
 
 ### `POST /api/job/start`
 
-Starts the job by transitioning state from `waiting` to `running`. No request body or response body/status is specified in this design. The transition is the endpoint's defined effect.
+Starts the job by transitioning state from `waiting` to `running`. The request has no body. The coordinator responds with HTTP 204 and no body. Repeated requests are harmless.
 
-### `GET /dataset/<file>`
+### `GET /worker`
 
-Serves the named dataset file from the coordinator. The response body is the file's raw bytes, not JSON. Dataset transfer encoding/content type is not specified here.
-
-### `GET /healthz`
-
-Returns the text `ok` (plain text, not JSON).
+Serves the browser worker join page.
 
 ### `GET /`
 
-Serves the static frontend from `web/`. The response is frontend content, not a JSON API response.
+Serves the live dashboard. It polls `GET /api/job` and starts the job through `POST /api/job/start`.
+
+### `GET /trainer.wasm`
+
+Serves the compiled WebAssembly trainer. Its exported function and memory ABI are owned by the trainer team and are not defined by this HTTP protocol.
+
+### `GET /dataset/<file>`
+
+Serves the named dataset file from the coordinator. The response body is the file's raw bytes, not JSON. Browser workers check byte size and SHA-256 against the `/w/hello` manifest before caching. The page uses IndexedDB when available and an in-memory cache for the current tab otherwise. SHA-256 uses Web Crypto when available and a bundled JavaScript implementation on LAN origins where `crypto.subtle` is unavailable. Cached bytes are rechecked against the manifest hash before reuse.
 
 ## Semantics
 
 - **Pull mode:** workers request work; the coordinator does not push it.
-- **Leases:** a task is leased to one worker until its deadline. Heartbeats extend leases for listed tasks held by that worker. On expiry, the task is requeued and the worker is marked `lost`.
+- **Leases:** a task is leased to one worker until its deadline. Heartbeats extend leases only for listed tasks held by that worker. An individual lease expiry requeues that task; a heartbeat timeout marks the worker `lost` and requeues its outstanding tasks.
 - **Rejoining:** a worker marked `lost` that later calls hello or heartbeat becomes `rejoined`. Hello uses the worker's stable name to identify it.
 - **Verification:** the coordinator may issue the same `taskId` again with a different `attempt` to a different worker for verification. The worker is not told that this is a verification run.
 - **Joining during a job:** workers may join after the job begins. Before the job is started, pulls return `wait`.
