@@ -75,16 +75,29 @@ func TestPlainPullCompletesEachTileAndSignalsJobDoneOnce(t *testing.T) {
 	if actions := ask(s, fakeStart, "worker", 0); len(actions) != 0 {
 		t.Fatalf("busy thread request was not ignored: %#v", actions)
 	}
-	if actions := result(s, fakeStart, first, 4); len(actions) != 0 {
-		t.Fatalf("first result unexpectedly finished job: %#v", actions)
+	accepted := result(s, fakeStart, first, 4)
+	if len(accepted) != 1 {
+		t.Fatalf("first result actions = %#v, want TaskAccepted", accepted)
+	}
+	if action, ok := accepted[0].(TaskAccepted); !ok || action.JobID != 4 || action.TaskID != first.Task.TaskID || action.Attempt != first.Attempt || action.DeviceID != "worker" || action.ThreadID != 0 || action.ComputeMs != 10 {
+		t.Fatalf("accepted action = %#v", accepted[0])
 	}
 	second := firstAssignment(t, ask(s, fakeStart, "worker", 0))
 	if second.Task.TaskID != 1 {
 		t.Fatalf("plain pull task id = %d, want 1", second.Task.TaskID)
 	}
 	finished := result(s, fakeStart, second, 4)
-	if !hasAction[JobDone](finished) || !hasAction[DropRequests](finished) {
-		t.Fatalf("last result actions = %#v, want DropRequests and JobDone", finished)
+	if len(finished) != 3 {
+		t.Fatalf("last result actions = %#v, want TaskAccepted, DropRequests, JobDone", finished)
+	}
+	if _, ok := finished[0].(TaskAccepted); !ok {
+		t.Fatalf("first final action = %#v, want TaskAccepted", finished[0])
+	}
+	if _, ok := finished[1].(DropRequests); !ok {
+		t.Fatalf("second final action = %#v, want DropRequests", finished[1])
+	}
+	if _, ok := finished[2].(JobDone); !ok {
+		t.Fatalf("third final action = %#v, want JobDone", finished[2])
 	}
 	if actions := result(s, fakeStart, second, 4); !hasAction[DuplicateDropped](actions) || hasAction[JobDone](actions) {
 		t.Fatalf("late duplicate actions = %#v", actions)
@@ -150,7 +163,7 @@ func TestDuplicateAndStaleResultsAreCounted(t *testing.T) {
 	if actions := result(s, fakeStart, assigned, 77); !hasAction[StaleDropped](actions) {
 		t.Fatalf("stale result actions = %#v", actions)
 	}
-	if actions := result(s, fakeStart, assigned, 5); !hasAction[JobDone](actions) {
+	if actions := result(s, fakeStart, assigned, 5); !hasAction[TaskAccepted](actions) || !hasAction[JobDone](actions) {
 		t.Fatalf("valid final result actions = %#v", actions)
 	}
 	if actions := result(s, fakeStart, assigned, 5); !hasAction[DuplicateDropped](actions) {

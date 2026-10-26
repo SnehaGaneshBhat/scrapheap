@@ -172,3 +172,46 @@
   - Speed is supplied by the caller in estimated-cost units per second; the server should compute it as `benchTilesPerSec * benchTileCost`.
 - What the next task depends on:
   - Server integration should own one Scheduler from one goroutine, add `Now` to each event, forward returned actions, and translate accepted result/job completion state into dashboard and metric events.
+
+## Coordinator hub and worker endpoint (2026-10-26 12:04 Asia/Calcutta)
+- What was built:
+  - Added a hub loop that owns the scheduler, worker registry, current job, and accepted tile store; WebSocket reader/writer goroutines communicate with that loop through events and bounded 64-message send queues.
+  - Implemented HELLO/WELCOME, BENCH_RESULT registration and hash policy, pull task assignment, RESULT verification and acceptance, ACK/JOB_DONE/JOB_STARTED messages, heartbeat timeout handling, disconnect recovery, and job reset.
+  - Added configurable job view/tile generation, a benchmark-tile-equivalent cost interface, accepted RGBA storage, and deterministic image hashing.
+  - Added seven WebSocket integration tests covering completion, disconnect and timeout retries, stale/duplicate/wrong-size results, request caps, new jobs, mock metadata, and benchmark hash rejection.
+- Files created/changed:
+  - `internal/hub/collector.go` — collector interface, device metadata, and no-op implementation.
+  - `internal/hub/job.go` — configurable job defaults, tile generation, and cost estimator interface.
+  - `internal/hub/store.go` — copied RGBA tile storage and ordered image SHA-256.
+  - `internal/hub/hub.go` — hub lifecycle, WebSocket endpoint, worker flow, and scheduler action handling.
+  - `internal/hub/hub_test.go` — worker integration tests using `httptest` and coder/websocket clients.
+  - `internal/sched/scheduler.go` — added `TaskAccepted` action, including winning worker/thread/compute time.
+  - `internal/sched/scheduler_test.go` — verifies accepted-result data and final action order.
+  - `go.mod`, `go.sum` — add `github.com/coder/websocket v1.8.15`.
+  - `docs/protocol.md` — clarifies that active-job state is sent as JOB_STARTED immediately after WELCOME.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `hub.New(Config, Collector, Verifier) *Hub`, `(*Hub).Run(context.Context)`, `(*Hub).Handler() http.Handler`, `(*Hub).StartNewJob() uint32`, and `(*Hub).Snapshot() Snapshot`.
+  - `Collector` callbacks for device/job/task lifecycle and duplicate/stale results; `DeviceInfo` contains advertised and benchmark data; `NopCollector` discards events.
+  - `Verifier.Verify(proto.Task, []byte) (ok bool, mismatched int)`; nil selects an accept-all verifier.
+  - `JobConfig`, `DefaultJobConfig()`, `CostEstimator.EstimateCost(proto.Task) float64`, `UnitCost`, and `TileStore` methods `Put`, `Get`, `Count`, `Reset`, and `ImageHash`.
+  - `sched.TaskAccepted{JobID, TaskID uint32; Attempt uint16; DeviceID string; ThreadID int; ComputeMs float32}`.
+  - `Handler()` is mounted by the caller at `/ws/worker`; worker and dashboard messages remain those in `docs/protocol.md`.
+- How to run/test:
+  - `gofmt -w internal/hub internal/sched` — passed.
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0); Go printed an access-denied warning while writing its default module stat cache. No custom GOMODCACHE was set.
+  - `go test ./...` — passed (exit 0): hub 7 tests, proto and sched packages passed; `cmd/server` has no tests. Loopback networking was enabled for the WebSocket integration tests.
+  - Race tests were not run, as the Task 2b instructions explicitly say `-race` does not work on this machine.
+- Decisions & deviations from this spec, and why:
+  - The current WELCOME contract has no running-job field. A worker joining during a job receives WELCOME followed immediately by JOB_STARTED for the active job; the protocol document now says this explicitly rather than inventing a field.
+  - REQUEST_TASK carries no thread ID. The hub allocates the next free zero-based logical thread slot for that device and enforces the advertised thread limit internally.
+  - `BENCH_RESULT.perThread` is used as the scheduler speed because job cost estimates use benchmark-tile equivalents.
+  - Socket close handshakes are started asynchronously so slow peers cannot block the hub's state-owning loop.
+- Known issues / TODOs / things you were unsure about:
+  - The default Mandelbrot view is a placeholder, and `UnitCost` does not yet model actual tile complexity.
+  - The worker handler is implemented, but `cmd/server` route wiring and dashboard WebSocket delivery remain with their owners.
+  - Default module-cache stat writes emit an access-denied warning on this machine although the build succeeds.
+- What the next task depends on:
+  - `cmd/server` should mount `Hub.Handler()` at `/ws/worker`, call `Run(ctx)`, and connect a real collector to `internal/metrics` and the dashboard feed.
+  - The worker must follow `docs/protocol.md`, especially WELCOME followed by active JOB_STARTED and per-connection logical request slots.

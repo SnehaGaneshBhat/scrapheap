@@ -36,7 +36,9 @@ mock devices and excluded from benchmark exports. A valid HELLO includes
 all threads and the per-thread throughput, plus the hash of the benchmark tile's
 RGBA bytes.
 
-The server sends WELCOME after accepting HELLO. Whenever a job starts or resets,
+The server sends WELCOME after accepting HELLO. WELCOME contains heartbeat timing;
+it does not contain job state. If a job is already running, the server follows
+WELCOME with JOB_STARTED for the current `jobId`. Whenever a job starts or resets,
 it increments `jobId` and broadcasts JOB_STARTED to connected workers. Results
 whose `jobId` is not the current job are dropped.
 

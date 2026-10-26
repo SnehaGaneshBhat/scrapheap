@@ -113,6 +113,18 @@ type AssignTask struct {
 
 func (AssignTask) isAction() {}
 
+// TaskAccepted signals the first valid result accepted for an active lease.
+type TaskAccepted struct {
+	JobID     uint32
+	TaskID    uint32
+	Attempt   uint16
+	DeviceID  string
+	ThreadID  int
+	ComputeMs float32
+}
+
+func (TaskAccepted) isAction() {}
+
 // JobDone signals that every tile in the active job has completed.
 type JobDone struct{ JobID uint32 }
 
@@ -394,15 +406,17 @@ func (s *Scheduler) resultReceived(e ResultReceived) []Action {
 	if l == nil || l.deviceID != e.DeviceID {
 		return []Action{DuplicateDropped{JobID: e.JobID, TaskID: e.TaskID, Attempt: e.Attempt}}
 	}
+	accepted := TaskAccepted{JobID: e.JobID, TaskID: e.TaskID, Attempt: e.Attempt, DeviceID: e.DeviceID, ThreadID: l.threadID, ComputeMs: e.ComputeMs}
 	for _, active := range t.leases {
 		s.removeLease(t, e.TaskID, active)
 	}
 	t.status = done
 	s.doneCount++
+	actions := []Action{accepted}
 	if s.doneCount == len(s.tiles) && !s.jobDone {
-		return s.finishJob()
+		actions = append(actions, s.finishJob()...)
 	}
-	return nil
+	return actions
 }
 
 func (s *Scheduler) tick(now time.Time) []Action {
