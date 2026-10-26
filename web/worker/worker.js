@@ -118,10 +118,7 @@ form.addEventListener("submit", async (event) => {
         throw new Error("Coordinator needs train-images and train-labels in raw IDX or gzip IDX format.");
       }
       if (activeThreadCount > 1) {
-        activeThreadCount = 1;
-        threadInput.value = "1";
-        hello = await register(activeThreadCount);
-        setStatus("MNIST uses one trainer per tab to limit memory use. Preparing the verified dataset...");
+        setStatus(`Starting ${activeThreadCount} trainer threads. Each uses ~100 MB RAM. Preparing dataset...`);
       }
     }
     heartbeatTimer = setInterval(sendHeartbeat, heartbeatMs / 2);

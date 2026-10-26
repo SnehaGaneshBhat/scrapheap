@@ -19,15 +19,24 @@ type SearchSpace struct {
 	Seeds   []int
 }
 
-// InitialSearchSpace is a documented, adjustable starter grid with 360 tasks.
+// InitialSearchSpace is a documented, adjustable starter grid.
+// Full search (360 tasks, ~2-5 min/task in WASM): uncomment the block below.
 func InitialSearchSpace() SearchSpace {
 	return SearchSpace{
-		Hidden:  []int{32, 64, 128, 256},
-		Rates:   []float64{0.001, 0.003, 0.01},
-		Epochs:  []int{3, 5, 8, 10, 12},
-		Batches: []int{32, 64, 128},
-		Seeds:   []int{1, 2},
+		Hidden:  []int{32, 64},
+		Rates:   []float64{0.001, 0.01, 0.1},
+		Epochs:  []int{2, 3},
+		Batches: []int{64, 128},
+		Seeds:   []int{1},
 	}
+	// Full grid (restore after demo):
+	// return SearchSpace{
+	// 	Hidden:  []int{32, 64, 128, 256},
+	// 	Rates:   []float64{0.001, 0.003, 0.01},
+	// 	Epochs:  []int{3, 5, 8, 10, 12},
+	// 	Batches: []int{32, 64, 128},
+	// 	Seeds:   []int{1, 2},
+	// }
 }
 
 // SearchSource builds a stable row-major list of independent MNIST tasks.

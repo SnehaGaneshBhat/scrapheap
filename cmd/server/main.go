@@ -37,8 +37,8 @@ func main() {
 	lease, heartbeat := time.Duration(*leaseSec)*time.Second, time.Duration(*heartbeatSec)*time.Second
 	var source sched.JobSource
 	var reducer sched.Reducer
-	var results *hub.SearchResults
 	var verifier sched.SampleVerifier
+	var resultsIface hub.ResultSnapshot // nil interface, safe for hub's nil guard
 	jobID, jobKind := "burn-job", proto.TaskKindBurn
 	switch *job {
 	case proto.TaskKindBurn:
@@ -54,13 +54,14 @@ func main() {
 		verifier = sched.SampleVerifierFunc(matchesBurnResult)
 	case "search":
 		source = hub.NewSearchSource(hub.InitialSearchSpace())
-		results = hub.NewSearchResults()
-		reducer = results
+		sr := hub.NewSearchResults()
+		reducer = sr
+		resultsIface = sr
 		verifier = hub.MNISTVerifier{AccuracyTolerance: *verifyAccTolerance, LossTolerance: *verifyLossTolerance}
 		jobID, jobKind = "mnist-search-01", proto.TaskKindMnist
 	}
 	s := sched.New(sched.Config{LeaseDur: lease, HeartbeatTimeout: heartbeat, VerifyRate: *verifyRate, Verifier: verifier}, source, reducer)
-	service, err := hub.New(hub.Config{Scheduler: s, Results: results, JobID: jobID, JobKind: jobKind, LeaseDuration: lease, HeartbeatInterval: heartbeat, WebDir: *webDir, DatasetDir: *dataDir, Logger: log.New(os.Stdout, "", 0)})
+	service, err := hub.New(hub.Config{Scheduler: s, Results: resultsIface, JobID: jobID, JobKind: jobKind, LeaseDuration: lease, HeartbeatInterval: heartbeat, WebDir: *webDir, DatasetDir: *dataDir, Logger: log.New(os.Stdout, "", 0)})
 	if err != nil {
 		log.Fatal(err)
 	}
