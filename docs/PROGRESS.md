@@ -215,3 +215,27 @@
 - What the next task depends on:
   - `cmd/server` should mount `Hub.Handler()` at `/ws/worker`, call `Run(ctx)`, and connect a real collector to `internal/metrics` and the dashboard feed.
   - The worker must follow `docs/protocol.md`, especially WELCOME followed by active JOB_STARTED and per-connection logical request slots.
+
+## Cross-language protocol test vectors (2026-10-26 12:26 Asia/Calcutta)
+- What was built:
+  - Added a TASK encoder/decoder test using the worker-produced 48-byte fixture and compared every decoded field, including y0, scale, and maxIter.
+  - Added a RESULT encoder/decoder test for a 64x64 all-zero RGBA payload, exact 20-byte header, and 16,404-byte total frame size.
+  - Documented both vectors in the shared protocol specification.
+- Files created/changed:
+  - `internal/proto/proto_test.go` — cross-language TASK and RESULT vector tests and fixed hex constants.
+  - `docs/protocol.md` — worker/server-shared vector bytes and expected frame lengths.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - No protocol API changes; tests use `Task`, `Result`, `EncodeTask`, `DecodeTask`, `EncodeResult`, and `DecodeResult`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test ./...` — passed (exit 0): hub, proto, and scheduler packages passed; `cmd/server` has no tests.
+- Decisions & deviations from this spec, and why:
+  - TASK fixture is kept as a Go string constant containing contiguous hex; the test decodes it to the exact 48-byte frame before comparing.
+  - RESULT’s fixed header is a Go hex constant, and the test appends/validates the specified 16,384 zero pixel bytes.
+- Known issues / TODOs / things you were unsure about:
+  - None identified for these test vectors.
+- What the next task depends on:
+  - Worker-side protocol tests should use the same documented TASK bytes and RESULT header/payload vector.

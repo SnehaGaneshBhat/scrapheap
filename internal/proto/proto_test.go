@@ -3,12 +3,66 @@ package proto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
 	"strings"
 	"testing"
 )
+
+// teamTaskVectorHex was produced by the worker's JS encoder (tools/protocol_test.js) and cross-checked independently.
+const teamTaskVectorHex = "01000300090000004d0000008000400040004000be3cd643eecbe7bfaee9a9d5abdfc03f2d431cebe2366a3e88130000"
+
+const teamResultHeaderHex = "02000300090000004d000000400040000000f742"
+
+func TestTeamTaskVector(t *testing.T) {
+	want := Task{
+		JobID: 9, TaskID: 77, Attempt: 3, X: 128, Y: 64, W: 64, H: 64,
+		X0: -0.7436438870371587, Y0: 0.13182590420531197,
+		Scale: 4.8828125e-8, MaxIter: 5000,
+	}
+	fixture, err := hex.DecodeString(teamTaskVectorHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeTask(want)
+	if err != nil {
+		t.Fatalf("EncodeTask: %v", err)
+	}
+	if len(fixture) != TaskHeaderSize || !bytes.Equal(encoded, fixture) {
+		t.Fatalf("TASK vector bytes (%d) = % x, want % x", len(encoded), encoded, fixture)
+	}
+	got, err := DecodeTask(fixture)
+	if err != nil {
+		t.Fatalf("DecodeTask: %v", err)
+	}
+	if got != want {
+		t.Fatalf("decoded TASK = %#v, want %#v (including y0, scale, and maxIter)", got, want)
+	}
+}
+
+func TestTeamResultVector(t *testing.T) {
+	want := Result{JobID: 9, TaskID: 77, Attempt: 3, W: 64, H: 64, ComputeMs: 123.5, RGBA: make([]byte, 64*64*4)}
+	header, err := hex.DecodeString(teamResultHeaderHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeResult(want)
+	if err != nil {
+		t.Fatalf("EncodeResult: %v", err)
+	}
+	if len(header) != ResultHeaderSize || len(encoded) != 16404 || !bytes.Equal(encoded[:ResultHeaderSize], header) {
+		t.Fatalf("RESULT vector size/header = %d/% x, want 16404/% x", len(encoded), encoded[:ResultHeaderSize], header)
+	}
+	got, err := DecodeResult(encoded)
+	if err != nil {
+		t.Fatalf("DecodeResult: %v", err)
+	}
+	if got.JobID != want.JobID || got.TaskID != want.TaskID || got.Attempt != want.Attempt || got.W != want.W || got.H != want.H || got.ComputeMs != want.ComputeMs || !bytes.Equal(got.RGBA, want.RGBA) {
+		t.Fatalf("decoded RESULT = %#v, want fields jobId=%d taskId=%d attempt=%d w=%d h=%d computeMs=%g and %d zero RGBA bytes", got, want.JobID, want.TaskID, want.Attempt, want.W, want.H, want.ComputeMs, len(want.RGBA))
+	}
+}
 
 func TestJSONRoundTrip(t *testing.T) {
 	tests := []struct {

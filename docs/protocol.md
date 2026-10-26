@@ -153,3 +153,33 @@ computeMs 300, pixels `00 01 02 ff` and `10 11 12 ff`):
 02 00 02 00 2a 00 00 00 04 03 02 01 02 00 01 00 00 00 96 43
 00 01 02 ff 10 11 12 ff
 ```
+
+## Cross-language test vector
+
+These vectors are shared with the worker implementation to detect differences in
+field offsets, byte order, and floating-point encoding. All binary values are
+little-endian as specified above.
+
+### TASK
+
+The fixture is a complete 48-byte TASK frame with jobId `9`, taskId `77`,
+attempt `3`, x/y `128`/`64`, w/h `64`/`64`, x0 `-0.7436438870371587`, y0
+`0.13182590420531197`, scale `4.8828125e-8`, and maxIter `5000`. It was produced
+by the worker's JS encoder (`tools/protocol_test.js`) and cross-checked
+independently.
+
+```text
+01 00 03 00 09 00 00 00 4d 00 00 00 80 00 40 00 40 00 40 00
+be 3c d6 43 ee cb e7 bf ae e9 a9 d5 ab df c0 3f 2d 43 1c eb
+e2 36 6a 3e 88 13 00 00
+```
+
+### RESULT
+
+The frame has attempt `3`, jobId `9`, taskId `77`, w/h `64`/`64`, and
+computeMs `123.5`. Its first 20 bytes are the following header; append exactly
+16,384 zero-valued RGBA bytes to make the complete 16,404-byte frame.
+
+```text
+02 00 03 00 09 00 00 00 4d 00 00 00 40 00 40 00 00 00 f7 42
+```
