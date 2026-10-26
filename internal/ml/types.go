@@ -3,7 +3,6 @@ package ml
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"math"
 )
 
@@ -56,29 +55,19 @@ type Data struct {
 	Test       []Example
 }
 
-// ErrorKind identifies a package-level failure category.
-type ErrorKind string
-
-const (
-	ErrorKindNotImplemented ErrorKind = "not_implemented"
-)
-
 // Error describes an operation failure in this package.
 type Error struct {
-	Op   string
-	Kind ErrorKind
-	Err  error
+	Op  string
+	Err error
 }
 
 func (e *Error) Error() string {
 	if e.Err != nil {
 		return e.Op + ": " + e.Err.Error()
 	}
-	return e.Op + ": " + string(e.Kind)
+	return e.Op + ": unknown failure"
 }
 
 func (e *Error) Unwrap() error {
 	return e.Err
 }
-
-var errNotImplemented = errors.New("not implemented")

@@ -25,6 +25,22 @@ func Train(cfg Config, d *Data) (Result, error) {
 		return Result{}, &Error{Op: "Train", Err: err}
 	}
 
+	network, err := trainModel(cfg, d)
+	if err != nil {
+		return Result{}, &Error{Op: "Train", Err: err}
+	}
+	accuracy, loss, err := evaluate(network, d.Validation)
+	if err != nil {
+		return Result{}, &Error{Op: "Train", Err: fmt.Errorf("validation: %w", err)}
+	}
+	return Result{
+		ValAcc:   accuracy,
+		ValLoss:  loss,
+		TrainSec: time.Since(started).Seconds(),
+	}, nil
+}
+
+func trainModel(cfg Config, d *Data) (*model, error) {
 	trainingRows := len(d.Train)
 	if cfg.TrainRows > 0 {
 		trainingRows = cfg.TrainRows
@@ -47,26 +63,34 @@ func Train(cfg Config, d *Data) (Result, error) {
 			}
 			batchEnd := batchStart + batchSize
 			if err := trainBatch(network, trainExamples, order[batchStart:batchEnd], cfg.LR); err != nil {
-				return Result{}, &Error{Op: "Train", Err: err}
+				return nil, err
 			}
 			batchStart = batchEnd
 		}
 	}
-
-	accuracy, loss, err := evaluate(network, d.Validation)
-	if err != nil {
-		return Result{}, &Error{Op: "Train", Err: fmt.Errorf("validation: %w", err)}
-	}
-	return Result{
-		ValAcc:   accuracy,
-		ValLoss:  loss,
-		TrainSec: time.Since(started).Seconds(),
-	}, nil
+	return network, nil
 }
 
 // EvalTest retrains cfg and evaluates it against the held-back test set.
 func EvalTest(cfg Config, d *Data) (TestResult, error) {
-	return TestResult{}, &Error{Op: "EvalTest", Kind: ErrorKindNotImplemented, Err: errNotImplemented}
+	if err := validateTrainingInput(cfg, d); err != nil {
+		return TestResult{}, &Error{Op: "EvalTest", Err: err}
+	}
+	if len(d.Test) == 0 {
+		return TestResult{}, &Error{Op: "EvalTest", Err: errors.New("test set must not be empty")}
+	}
+	if err := validateExamples(d.Test, len(d.Train[0].Pixels), "test"); err != nil {
+		return TestResult{}, &Error{Op: "EvalTest", Err: err}
+	}
+	network, err := trainModel(cfg, d)
+	if err != nil {
+		return TestResult{}, &Error{Op: "EvalTest", Err: err}
+	}
+	accuracy, _, err := evaluate(network, d.Test)
+	if err != nil {
+		return TestResult{}, &Error{Op: "EvalTest", Err: fmt.Errorf("test: %w", err)}
+	}
+	return TestResult{TestAcc: accuracy}, nil
 }
 
 func validateTrainingInput(cfg Config, d *Data) error {

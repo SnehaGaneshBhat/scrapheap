@@ -39,6 +39,51 @@ func TestTrainDoesNotReadTestSet(t *testing.T) {
 	}
 }
 
+func TestEvalTestRetrainsAndUsesOnlyTestMetrics(t *testing.T) {
+	data := binarySyntheticData(32, 16)
+	data.Test = append([]Example(nil), data.Validation...)
+	cfg := Config{Hidden: 8, LR: 0.1, Epochs: 20, Batch: 8, Seed: 12345}
+
+	first, err := EvalTest(cfg, data)
+	if err != nil {
+		t.Fatalf("EvalTest: %v", err)
+	}
+	second, err := EvalTest(cfg, data)
+	if err != nil {
+		t.Fatalf("second EvalTest: %v", err)
+	}
+	if first.TestAcc != second.TestAcc {
+		t.Fatalf("EvalTest differs for identical config and seed: %g != %g", first.TestAcc, second.TestAcc)
+	}
+	if first.TestAcc <= 0.5 {
+		t.Fatalf("test accuracy = %g, want above chance", first.TestAcc)
+	}
+
+	data.Test = []Example{{Pixels: []float64{1, 0}, Label: 1}, {Pixels: []float64{0, 1}, Label: 0}}
+	flipped, err := EvalTest(cfg, data)
+	if err != nil {
+		t.Fatalf("EvalTest with changed test set: %v", err)
+	}
+	if flipped.TestAcc >= first.TestAcc {
+		t.Fatalf("test set did not affect reported test accuracy: original=%g flipped=%g", first.TestAcc, flipped.TestAcc)
+	}
+}
+
+func TestEvalTestRejectsInvalidTestSet(t *testing.T) {
+	data := binarySyntheticData(4, 2)
+	cfg := Config{Hidden: 4, LR: 0.1, Epochs: 1, Batch: 2}
+	for _, testSet := range [][]Example{
+		nil,
+		{{Pixels: []float64{1}, Label: 0}},
+		{{Pixels: []float64{1, 0}, Label: 10}},
+	} {
+		data.Test = testSet
+		if _, err := EvalTest(cfg, data); err == nil {
+			t.Fatalf("EvalTest accepted invalid test set %#v", testSet)
+		}
+	}
+}
+
 func TestTrainMetricsAreStableForSeed(t *testing.T) {
 	cfg := Config{Hidden: 8, LR: 0.1, Epochs: 12, Batch: 8, Seed: 12345}
 	first, err := Train(cfg, binarySyntheticData(16, 8))
