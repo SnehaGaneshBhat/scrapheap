@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDecodeExamplesSupportsRawAndGzipIDX(t *testing.T) {
@@ -104,10 +105,12 @@ func TestLoadDataRealMNIST(t *testing.T) {
 		t.Skip("MNIST dataset absent; set MNIST_DIR or place the four verified gzip files in data/")
 	}
 
+	started := time.Now()
 	data, err := LoadData(dir)
 	if err != nil {
 		t.Fatalf("LoadData(%q): %v", dir, err)
 	}
+	t.Logf("LoadData duration: %.6f seconds", time.Since(started).Seconds())
 	if len(data.Train) != trainSplitCount || len(data.Validation) != validationCount || len(data.Test) != testImageCount {
 		t.Fatalf("dataset split sizes = %d/%d/%d, want %d/%d/%d",
 			len(data.Train), len(data.Validation), len(data.Test),
