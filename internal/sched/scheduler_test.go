@@ -235,18 +235,28 @@ func TestRandomizedThousandTaskSimulation(t *testing.T) {
 	}
 }
 
-func TestHeartbeatExtendsAllWorkerLeases(t *testing.T) {
-	now := startTime()
-	s := newTestScheduler(makeTasks(2), newReducer())
-	id, _ := s.Hello("alpha", WorkerInfo{}, now)
-	s.Start(now)
-	s.Pull(id, now)
-	s.Pull(id, now)
-	if ok, unknown := s.Heartbeat(id, []string{"task-0000"}, now.Add(time.Second)); !ok || unknown {
-		t.Fatalf("heartbeat = (%v,%v)", ok, unknown)
+func TestHeartbeatExtendsOnlyListedWorkerLeases(t *testing.T) {
+	base := startTime()
+	s := New(Config{LeaseDur: 6 * time.Second, HeartbeatTimeout: 30 * time.Second}, makeTasks(3), newReducer())
+	workerID, _ := s.Hello("alpha", WorkerInfo{}, base)
+	s.Start(base)
+	a := s.Pull(workerID, base)
+	b := s.Pull(workerID, base)
+	c := s.Pull(workerID, base)
+	if a.Status != StatusTask || b.Status != StatusTask || c.Status != StatusTask {
+		t.Fatalf("assignments: A=%+v B=%+v C=%+v", a, b, c)
 	}
-	s.Tick(now.Add(2500 * time.Millisecond))
-	if got := s.Snapshot(now.Add(2500 * time.Millisecond)); got.InFlight != 2 || got.Requeued != 0 {
-		t.Fatalf("heartbeat failed to extend every held lease: %+v", got)
+
+	heartbeatAt := base.Add(2 * time.Second)
+	if ok, unknown := s.Heartbeat(workerID, []string{a.TaskID, b.TaskID}, heartbeatAt); !ok || unknown {
+		t.Fatalf("heartbeat = (%v,%v), want (true,false)", ok, unknown)
+	}
+	for _, assignment := range []Assignment{a, b} {
+		if got, want := s.tasks[assignment.TaskID].deadline, base.Add(8*time.Second); !got.Equal(want) {
+			t.Errorf("listed task %s deadline=%s, want %s", assignment.TaskID, got, want)
+		}
+	}
+	if got, want := s.tasks[c.TaskID].deadline, base.Add(6*time.Second); !got.Equal(want) {
+		t.Errorf("omitted task %s deadline=%s, want unchanged deadline %s", c.TaskID, got, want)
 	}
 }

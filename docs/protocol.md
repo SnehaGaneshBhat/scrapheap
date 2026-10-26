@@ -123,7 +123,7 @@ The allowed `reason` values are `ok`, `duplicate`, `stale`, and `unknown`. A lat
 
 ### `POST /w/heartbeat`
 
-Reports the task IDs currently running on this worker and extends leases for the tasks it holds.
+Reports the task IDs currently running on this worker. The worker must list every task it is running. A heartbeat extends leases only for task IDs in `running` that this worker currently holds. Tasks the worker holds but omits are not extended; their leases expire and they are requeued. IDs in `running` that the worker does not hold are ignored. The heartbeat refreshes worker liveness even when `running` is empty.
 
 Request:
 
@@ -152,7 +152,7 @@ Reply when the worker ID is unknown:
 }
 ```
 
-`unknownWorker: true` tells the worker to call `/w/hello` again. A heartbeat extends leases only for listed tasks held by that worker.
+`unknownWorker: true` tells the worker to call `/w/hello` again. The heartbeat refreshes worker liveness, but lease renewal applies only to the worker's listed, currently held tasks as described above.
 
 ## Task kinds
 

@@ -253,7 +253,7 @@ func (s *Scheduler) Result(workerID, taskID string, attempt int, result []byte, 
 	return Outcome{Accepted: true, Reason: ReasonOK}
 }
 
-// Heartbeat refreshes the worker's liveness and all task leases it currently holds.
+// Heartbeat refreshes the worker's liveness and extends leases only for task IDs in running that the worker currently holds.
 func (s *Scheduler) Heartbeat(workerID string, running []string, now time.Time) (ok, unknownWorker bool) {
 	w, exists := s.workers[workerID]
 	if !exists {
@@ -263,13 +263,12 @@ func (s *Scheduler) Heartbeat(workerID string, running []string, now time.Time) 
 		w.status = WorkerStatusRejoined
 	}
 	w.lastHeartbeat = now
-	for _, id := range s.taskOrder {
+	for _, id := range running {
 		t := s.tasks[id]
-		if t.status == "leased" && t.workerID == workerID {
+		if t != nil && t.status == "leased" && t.workerID == workerID {
 			t.deadline = now.Add(s.cfg.LeaseDur)
 		}
 	}
-	_ = running
 	return true, false
 }
 
