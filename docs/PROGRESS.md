@@ -104,3 +104,36 @@
   - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
 - What the next task depends on:
   - Worker implementation should use the exact documented BenchTile constants and hash the returned RGBA bytes; server integration should follow the documented JOB_STARTED/WELCOME request lifecycle.
+
+## Protocol: adopt team layout (2026-10-26 10:53 Asia/Calcutta)
+
+- What was built:
+  - Changed TASK and RESULT to the canonical 48-byte and 20-byte headers, including reserved bytes, uint16 attempts, and float32 compute time.
+  - Added canonical JSON fields for HELLO and BENCH_RESULT while retaining JOB_STARTED, BenchTile, and prior protocol messages.
+  - Added CanvasSize and TileSize constants and updated pixel mapping and kernel documentation.
+  - Expanded tests for exact frame bytes, reserved-byte reads, bounds, compute time, hash/thread validation, and ignored JSON extensions.
+- Files created/changed:
+  - `internal/proto/proto.go` — canonical frame layouts and JSON types/validation.
+  - `internal/proto/proto_test.go` — exact wire vectors and malformed-input/round-trip coverage.
+  - `docs/protocol.md` — canonical contract, offsets, examples, lifecycle, render semantics, and kernel signature.
+  - `docs/PROGRESS.md` — this task report.
+  - `README.md` — current endpoint and wire-contract summary.
+- Public interfaces:
+  - `Task.Attempt` and `Result.Attempt` are `uint16`; `Result.ComputeMs` is `float32`.
+  - `CanvasSize = 2048`, `TileSize = 64`, `MaxTileDim = 256`; prior `BenchTile()` constants/helper and JSON message types remain available.
+  - HELLO includes `Mock bool`; BENCH_RESULT includes `PerThread float64` and `Threads int`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - The shared Go `Message.Attempt` is `uint16`, so JSON attempts beyond the binary protocol range are rejected during decoding.
+  - HELLO omitting `mock` decodes as false; the encoder writes the field explicitly.
+  - Unknown extra JSON fields are ignored as requested; required fields and known-field types are still validated.
+- Known issues / TODOs / things you were unsure about:
+  - The server and worker UI still need to implement the documented request limits, pixel calculations, job reset behavior, mock tagging, stale-result drop, and `process_tile` contract.
+  - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
+- What the next task depends on:
+  - Worker/server integration should use the documented canonical offsets and preserve the per-pixel coordinate formula exactly.

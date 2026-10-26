@@ -20,9 +20,11 @@ go test ./...
 
 ## Worker contract
 
-Workers connect to `/ws/worker`; the dashboard connects to `/ws/dash`. See
-[docs/protocol.md](docs/protocol.md) for message formats, binary frames, job
-lifecycle, and the shared benchmark tile constants.
+Workers connect to /ws/worker; the dashboard connects to /ws/dash. The shared
+contract defines 48-byte TASK and 20-byte RESULT headers, row-major RGBA output,
+job lifecycle behavior, and the `process_tile` kernel signature. See
+[docs/protocol.md](docs/protocol.md) for field offsets, pixel mapping, and the
+fixed benchmark parameters.
 
 ## Run
 
