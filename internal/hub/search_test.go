@@ -8,13 +8,13 @@ import (
 	"scrapheap/internal/sched"
 )
 
-func TestInitialSearchSpaceHasStable360Tasks(t *testing.T) {
+func TestInitialSearchSpaceHasStable48Tasks(t *testing.T) {
 	source := NewSearchSource(InitialSearchSpace())
 	tasks := source.Tasks()
-	if len(tasks) != 360 {
-		t.Fatalf("task count = %d, want 360", len(tasks))
+	if len(tasks) != 48 {
+		t.Fatalf("task count = %d, want 48", len(tasks))
 	}
-	if tasks[0].ID != "mnist-001" || tasks[len(tasks)-1].ID != "mnist-360" {
+	if tasks[0].ID != "mnist-001" || tasks[len(tasks)-1].ID != "mnist-048" {
 		t.Fatalf("unexpected task ID range: %q .. %q", tasks[0].ID, tasks[len(tasks)-1].ID)
 	}
 	for _, task := range tasks {

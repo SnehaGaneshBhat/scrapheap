@@ -20,12 +20,13 @@ type SearchSpace struct {
 }
 
 // InitialSearchSpace is a documented, adjustable starter grid.
+// 48 tasks: 2 hidden × 4 rates × 3 epochs × 2 batches × 1 seed — each finishes in ~15-40s in WASM.
 // Full search (360 tasks, ~2-5 min/task in WASM): uncomment the block below.
 func InitialSearchSpace() SearchSpace {
 	return SearchSpace{
 		Hidden:  []int{32, 64},
-		Rates:   []float64{0.001, 0.01, 0.1},
-		Epochs:  []int{2, 3},
+		Rates:   []float64{0.0003, 0.001, 0.01, 0.1},
+		Epochs:  []int{2, 3, 4},
 		Batches: []int{64, 128},
 		Seeds:   []int{1},
 	}
