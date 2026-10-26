@@ -43,6 +43,39 @@ type Hub struct {
 	runOnce   sync.Once
 }
 
+type jobSnapshotResponse struct {
+	JobID       string                   `json:"jobId"`
+	State       string                   `json:"state"`
+	Total       int                      `json:"total"`
+	Done        int                      `json:"done"`
+	InFlight    int                      `json:"inFlight"`
+	Requeued    int                      `json:"requeued"`
+	ElapsedSec  float64                  `json:"elapsedSec"`
+	ETASec      float64                  `json:"etaSec"`
+	Workers     []proto.WorkerInfo       `json:"workers"`
+	Leaderboard []proto.LeaderboardEntry `json:"leaderboard"`
+	Verify      verifySnapshotResponse   `json:"verify"`
+	Baseline    proto.BaselineInfo       `json:"baseline"`
+	Best        proto.BestResult         `json:"best"`
+}
+
+type verifySnapshotResponse struct {
+	Sampled    int                `json:"sampled"`
+	Matched    int                `json:"matched"`
+	Mismatched int                `json:"mismatched"`
+	Skipped    int                `json:"skipped"`
+	Pending    int                `json:"pending"`
+	Mismatches []mismatchResponse `json:"mismatches"`
+}
+
+type mismatchResponse struct {
+	TaskID         string          `json:"taskId"`
+	OriginalWorker string          `json:"originalWorker"`
+	VerifierWorker string          `json:"verifierWorker"`
+	Original       json.RawMessage `json:"original"`
+	Rerun          json.RawMessage `json:"rerun"`
+}
+
 func New(scheduler *sched.Scheduler, config Config) *Hub {
 	if config.Clock == nil {
 		config.Clock = time.Now
@@ -217,11 +250,23 @@ func (h *Hub) handleJob(w http.ResponseWriter, r *http.Request) {
 			TasksDone: worker.TasksDone, Speed: worker.Speed, Status: worker.Status,
 		})
 	}
-	writeJSON(w, http.StatusOK, proto.JobSnapshot{
+	verify := verifySnapshotResponse{
+		Sampled: snapshot.Verify.Sampled, Matched: snapshot.Verify.Matched,
+		Mismatched: snapshot.Verify.Mismatched, Skipped: snapshot.Verify.Skipped,
+		Pending: snapshot.Verify.Pending, Mismatches: make([]mismatchResponse, 0, len(snapshot.Verify.Mismatches)),
+	}
+	for _, mismatch := range snapshot.Verify.Mismatches {
+		verify.Mismatches = append(verify.Mismatches, mismatchResponse{
+			TaskID: mismatch.TaskID, OriginalWorker: mismatch.OriginalWorker,
+			VerifierWorker: mismatch.VerifierWorker, Original: json.RawMessage(mismatch.Original),
+			Rerun: json.RawMessage(mismatch.Rerun),
+		})
+	}
+	writeJSON(w, http.StatusOK, jobSnapshotResponse{
 		JobID: h.config.JobID, State: snapshot.State, Total: snapshot.Total, Done: snapshot.Done,
 		InFlight: snapshot.InFlight, Requeued: snapshot.Requeued,
 		ElapsedSec: snapshot.Elapsed.Seconds(), ETASec: snapshot.ETA.Seconds(),
-		Workers: workers, Leaderboard: []proto.LeaderboardEntry{}, Verify: proto.VerifyStats{},
+		Workers: workers, Leaderboard: []proto.LeaderboardEntry{}, Verify: verify,
 		Baseline: proto.BaselineInfo{Seconds: 0, Label: "1 laptop, all cores"}, Best: proto.BestResult{},
 	})
 }

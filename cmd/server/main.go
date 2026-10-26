@@ -26,14 +26,15 @@ func run() int {
 	job := flag.String("job", "burn", "job type: burn or search")
 	burnTasks := flag.Int("burn-tasks", 200, "number of burn tasks")
 	burnIters := flag.Int("burn-iters", 50_000_000, "iterations per burn task")
-	verifyRate := flag.Float64("verify-rate", 0, "verification rate (reserved; currently ignored)")
+	verifyRate := flag.Float64("verify-rate", 0, "deterministic sampled verification rate")
+	verifySeed := flag.Uint64("verify-seed", 1, "verification sampling seed")
+	verifyTimeoutSec := flag.Int("verify-timeout-sec", 30, "time a queued verification may wait before being skipped")
 	leaseSec := flag.Int("leasesec", 6, "task lease duration in seconds")
 	heartbeatSec := flag.Int("heartbeat-sec", 2, "worker heartbeat interval in seconds")
 	dataDir := flag.String("data", "./data", "dataset directory")
 	webDir := flag.String("web", "./web", "static frontend directory")
 	autostart := flag.Bool("autostart", false, "start the job immediately")
 	flag.Parse()
-	_ = *verifyRate
 
 	if *job == "search" {
 		fmt.Fprintln(os.Stderr, "not implemented yet")
@@ -50,6 +51,10 @@ func run() int {
 	scheduler := sched.New(sched.Config{
 		LeaseDur:         leaseDuration,
 		HeartbeatTimeout: leaseDuration,
+		VerifyRate:       *verifyRate,
+		VerifySeed:       *verifySeed,
+		VerifyTimeout:    time.Duration(*verifyTimeoutSec) * time.Second,
+		Verifier:         burn.NewVerifier(),
 	}, tasks, reducer)
 	serverHub := hub.New(scheduler, hub.Config{
 		JobID:        "burn-search",

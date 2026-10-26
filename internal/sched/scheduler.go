@@ -2,6 +2,8 @@ package sched
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/fnv"
 	"time"
 )
 
@@ -39,9 +41,19 @@ type Reducer interface {
 	Accept(spec TaskSpec, result []byte, workerID string)
 }
 
+// Verifier compares an accepted result with a rerun without interpreting the
+// result format in the scheduler.
+type Verifier interface {
+	Match(spec TaskSpec, original, rerun []byte) bool
+}
+
 type Config struct {
 	LeaseDur         time.Duration
 	HeartbeatTimeout time.Duration
+	VerifyRate       float64
+	VerifySeed       uint64
+	VerifyTimeout    time.Duration
+	Verifier         Verifier
 }
 
 type WorkerInfo struct {
@@ -90,6 +102,24 @@ type Snapshot struct {
 	Elapsed  time.Duration
 	ETA      time.Duration
 	Workers  []WorkerSnapshot
+	Verify   VerifySnapshot
+}
+
+type VerifySnapshot struct {
+	Sampled    int
+	Matched    int
+	Mismatched int
+	Skipped    int
+	Pending    int
+	Mismatches []Mismatch
+}
+
+type Mismatch struct {
+	TaskID         string
+	OriginalWorker string
+	VerifierWorker string
+	Original       []byte
+	Rerun          []byte
 }
 
 type Scheduler struct {
@@ -100,6 +130,7 @@ type Scheduler struct {
 	tasks       map[string]*taskState
 	taskOrder   []string
 	queue       []string
+	verifyQueue []string
 	workers     map[string]*workerState
 	workerOrder []string
 	workerIDs   map[string]string
@@ -107,16 +138,24 @@ type Scheduler struct {
 	done        int
 	requeued    int
 	events      []Event
+	verify      VerifySnapshot
 }
 
 type taskState struct {
-	spec     TaskSpec
-	status   string
-	workerID string
-	deadline time.Time
-	attempt  int
-	inQueue  bool
-	seconds  float64
+	spec             TaskSpec
+	status           string
+	workerID         string
+	deadline         time.Time
+	attempt          int
+	inQueue          bool
+	seconds          float64
+	sampled          bool
+	verifyStatus     string
+	verifyQueuedAt   time.Time
+	verifyWorkerID   string
+	verifyDeadline   time.Time
+	originalWorkerID string
+	originalResult   []byte
 }
 
 type workerState struct {
@@ -146,6 +185,11 @@ func New(cfg Config, source JobSource, reducer Reducer) *Scheduler {
 			}
 			spec.Payload = bytes.Clone(spec.Payload)
 			s.tasks[spec.ID] = &taskState{spec: spec, status: "queued", inQueue: true}
+			task := s.tasks[spec.ID]
+			task.sampled = shouldSample(cfg.VerifySeed, spec.ID, cfg.VerifyRate)
+			if task.sampled {
+				s.verify.Sampled++
+			}
 			s.taskOrder = append(s.taskOrder, spec.ID)
 			s.queue = append(s.queue, spec.ID)
 		}
@@ -193,6 +237,19 @@ func (s *Scheduler) Pull(workerID string, now time.Time) Assignment {
 	}
 	w.lastHeartbeat = now
 	w.status = WorkerStatusActive
+	for i, id := range s.verifyQueue {
+		t := s.tasks[id]
+		if t == nil || t.verifyStatus != "queued" || t.originalWorkerID == workerID {
+			continue
+		}
+		s.verifyQueue = append(s.verifyQueue[:i], s.verifyQueue[i+1:]...)
+		t.verifyStatus = "leased"
+		t.verifyWorkerID = workerID
+		t.attempt++
+		t.verifyDeadline = now.Add(s.cfg.LeaseDur)
+		s.events = append(s.events, Event{Kind: "verify_assigned", WorkerName: w.name, TaskID: id})
+		return Assignment{Status: StatusTask, TaskID: id, Kind: t.spec.Kind, Payload: bytes.Clone(t.spec.Payload), Deadline: t.verifyDeadline, Attempt: t.attempt}
+	}
 	for len(s.queue) > 0 {
 		id := s.queue[0]
 		s.queue = s.queue[1:]
@@ -217,7 +274,7 @@ func (s *Scheduler) Pull(workerID string, now time.Time) Assignment {
 			Attempt:  t.attempt,
 		}
 	}
-	if s.done == len(s.tasks) {
+	if s.isDone() {
 		return Assignment{Status: StatusDone}
 	}
 	return Assignment{Status: StatusWait}
@@ -234,7 +291,25 @@ func (s *Scheduler) Result(workerID, taskID string, attempt int, result []byte, 
 	if !taskOK {
 		return Outcome{Reason: ReasonUnknown}
 	}
+	if t.verifyStatus == "leased" && t.verifyWorkerID == workerID {
+		t.verifyWorkerID = ""
+		t.verifyDeadline = time.Time{}
+		if s.cfg.Verifier != nil && s.cfg.Verifier.Match(t.spec, t.originalResult, result) {
+			t.verifyStatus = "matched"
+			s.verify.Matched++
+			s.events = append(s.events, Event{Kind: "verified", WorkerName: w.name, TaskID: taskID})
+		} else {
+			t.verifyStatus = "mismatched"
+			s.verify.Mismatched++
+			s.verify.Mismatches = append(s.verify.Mismatches, Mismatch{TaskID: taskID, OriginalWorker: t.originalWorkerID, VerifierWorker: workerID, Original: bytes.Clone(t.originalResult), Rerun: bytes.Clone(result)})
+			s.events = append(s.events, Event{Kind: "mismatch", WorkerName: w.name, TaskID: taskID})
+		}
+		return Outcome{Accepted: true, Reason: ReasonOK}
+	}
 	if t.status == "done" {
+		if t.sampled && t.verifyStatus == "skipped" && workerID != t.originalWorkerID {
+			return Outcome{Reason: ReasonStale}
+		}
 		s.events = append(s.events, Event{Kind: "duplicate", WorkerName: w.name, TaskID: taskID})
 		return Outcome{Reason: ReasonDuplicate}
 	}
@@ -244,12 +319,19 @@ func (s *Scheduler) Result(workerID, taskID string, attempt int, result []byte, 
 	t.inQueue = false
 	t.workerID = ""
 	t.seconds = seconds
+	t.originalWorkerID = workerID
+	t.originalResult = bytes.Clone(result)
 	s.done++
 	w.tasksDone++
 	if s.reducer != nil {
 		s.reducer.Accept(t.spec, bytes.Clone(result), workerID)
 	}
 	s.events = append(s.events, Event{Kind: "completed", WorkerName: w.name, TaskID: taskID})
+	if t.sampled {
+		t.verifyStatus = "queued"
+		t.verifyQueuedAt = now
+		s.verifyQueue = append(s.verifyQueue, taskID)
+	}
 	return Outcome{Accepted: true, Reason: ReasonOK}
 }
 
@@ -268,6 +350,9 @@ func (s *Scheduler) Heartbeat(workerID string, running []string, now time.Time) 
 		if t != nil && t.status == "leased" && t.workerID == workerID {
 			t.deadline = now.Add(s.cfg.LeaseDur)
 		}
+		if t != nil && t.verifyStatus == "leased" && t.verifyWorkerID == workerID {
+			t.verifyDeadline = now.Add(s.cfg.LeaseDur)
+		}
 	}
 	return true, false
 }
@@ -280,20 +365,37 @@ func (s *Scheduler) Tick(now time.Time) {
 			continue
 		}
 		if s.cfg.HeartbeatTimeout > 0 && now.Sub(w.lastHeartbeat) >= s.cfg.HeartbeatTimeout {
-			s.loseWorker(w)
+			s.loseWorker(w, now)
 			continue
 		}
 		for _, taskID := range s.taskOrder {
 			t := s.tasks[taskID]
 			if t.status == "leased" && t.workerID == w.id && !now.Before(t.deadline) {
-				s.loseWorker(w)
+				s.loseWorker(w, now)
 				break
 			}
+		}
+		if w.status != WorkerStatusLost {
+			for _, taskID := range s.taskOrder {
+				t := s.tasks[taskID]
+				if t.verifyStatus == "leased" && t.verifyWorkerID == w.id && !now.Before(t.verifyDeadline) {
+					s.loseWorker(w, now)
+					break
+				}
+			}
+		}
+	}
+	for _, id := range s.taskOrder {
+		t := s.tasks[id]
+		if t.verifyStatus == "queued" && s.cfg.VerifyTimeout > 0 && now.Sub(t.verifyQueuedAt) >= s.cfg.VerifyTimeout {
+			t.verifyStatus = "skipped"
+			s.verify.Skipped++
+			s.events = append(s.events, Event{Kind: "verify_skipped", TaskID: id})
 		}
 	}
 }
 
-func (s *Scheduler) loseWorker(w *workerState) {
+func (s *Scheduler) loseWorker(w *workerState, now time.Time) {
 	if w.status == WorkerStatusLost {
 		return
 	}
@@ -315,6 +417,20 @@ func (s *Scheduler) loseWorker(w *workerState) {
 		s.events = append(s.events, Event{Kind: "requeued", WorkerName: w.name, TaskID: id})
 		lostAny = true
 	}
+	for _, id := range s.taskOrder {
+		t := s.tasks[id]
+		if t.verifyStatus != "leased" || t.verifyWorkerID != w.id {
+			continue
+		}
+		t.verifyStatus = "queued"
+		t.verifyWorkerID = ""
+		t.verifyDeadline = time.Time{}
+		t.verifyQueuedAt = now
+		s.verifyQueue = append(s.verifyQueue, id)
+		s.events = append(s.events, Event{Kind: "lost", WorkerName: w.name, TaskID: id})
+		s.events = append(s.events, Event{Kind: "requeued", WorkerName: w.name, TaskID: id})
+		lostAny = true
+	}
 	if !lostAny {
 		s.events = append(s.events, Event{Kind: "lost", WorkerName: w.name})
 	}
@@ -328,7 +444,9 @@ func (s *Scheduler) Snapshot(now time.Time) Snapshot {
 		Done:     s.done,
 		Requeued: s.requeued,
 		Workers:  make([]WorkerSnapshot, 0, len(s.workers)),
+		Verify:   s.verify,
 	}
+	out.Verify.Mismatches = cloneMismatches(s.verify.Mismatches)
 	if s.state != JobStateWaiting {
 		out.Elapsed = now.Sub(s.startedAt)
 		if out.Elapsed < 0 {
@@ -364,10 +482,44 @@ func (s *Scheduler) Snapshot(now time.Time) Snapshot {
 	if active > 0 && s.done > 0 {
 		out.ETA = time.Duration(float64(remaining) * (totalSeconds / float64(s.done)) / float64(active) * float64(time.Second))
 	}
-	if s.done == len(s.tasks) {
+	out.Verify.Pending = out.Verify.Sampled - out.Verify.Matched - out.Verify.Mismatched - out.Verify.Skipped
+	if out.Verify.Pending < 0 {
+		out.Verify.Pending = 0
+	}
+	if s.isDone() {
 		out.State = JobStateDone
 	}
 	return out
+}
+
+func (s *Scheduler) isDone() bool {
+	return s.done == len(s.tasks) && s.verify.Matched+s.verify.Mismatched+s.verify.Skipped == s.verify.Sampled
+}
+
+func cloneMismatches(in []Mismatch) []Mismatch {
+	out := make([]Mismatch, len(in))
+	for i, mismatch := range in {
+		out[i] = mismatch
+		out[i].Original = bytes.Clone(mismatch.Original)
+		out[i].Rerun = bytes.Clone(mismatch.Rerun)
+	}
+	return out
+}
+
+func shouldSample(seed uint64, taskID string, rate float64) bool {
+	if rate <= 0 {
+		return false
+	}
+	if rate >= 1 {
+		return true
+	}
+	h := fnv.New64a()
+	var seedBytes [8]byte
+	binary.LittleEndian.PutUint64(seedBytes[:], seed)
+	_, _ = h.Write(seedBytes[:])
+	_, _ = h.Write([]byte(taskID))
+	value := float64(h.Sum64()>>11) / (1 << 53)
+	return value < rate
 }
 
 // DrainEvents returns and clears events accumulated since the previous call.

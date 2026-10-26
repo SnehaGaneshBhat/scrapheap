@@ -204,7 +204,7 @@ The MNIST payload and result are proposals pending P2 sign-off.
 
 ### `GET /api/job`
 
-Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, and `mismatched`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
+Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, `mismatched`, `skipped`, `pending`, and `mismatches`. Each mismatch has `taskId`, `originalWorker`, `verifierWorker`, `original`, and `rerun`; the result fields contain opaque JSON values. `sampled = matched + mismatched + skipped + pending`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
 
 ```json
 {
@@ -233,7 +233,22 @@ Returns a live job snapshot. The object has exactly these top-level fields: `job
       "valAcc": 0.97
     }
   ],
-  "verify": {"sampled": 3, "matched": 2, "mismatched": 1},
+  "verify": {
+    "sampled": 4,
+    "matched": 2,
+    "mismatched": 1,
+    "skipped": 0,
+    "pending": 1,
+    "mismatches": [
+      {
+        "taskId": "task-0017",
+        "originalWorker": "worker-01",
+        "verifierWorker": "worker-02",
+        "original": {"checksum": "18446744073709551615"},
+        "rerun": {"checksum": "18446744073709551614"}
+      }
+    ]
+  },
   "baseline": {"seconds": 12.4, "label": "single-worker"},
   "best": {
     "config": {"hidden": 128, "lr": 0.01, "epochs": 5, "batch": 64, "seed": 12345},
@@ -273,7 +288,9 @@ Serves the static frontend from `web/`. The response is frontend content, not a 
 - **Pull mode:** workers request work; the coordinator does not push it.
 - **Leases:** a task is leased to one worker until its deadline. Heartbeats extend leases for listed tasks held by that worker. On expiry, the task is requeued and the worker is marked `lost`.
 - **Rejoining:** a worker marked `lost` that later calls hello or heartbeat becomes `rejoined`. Hello uses the worker's stable name to identify it.
-- **Verification:** the coordinator may issue the same `taskId` again with a different `attempt` to a different worker for verification. The worker is not told that this is a verification run.
+- **Verification sampling:** sampling is a pure, deterministic function of `(verify-seed, taskID)`, using `hash/fnv` to map to `[0,1)`; a task is sampled when the value is less than `verify-rate`. The same seed and task IDs produce the same sample set. A rate of `0` disables sampling. Server defaults are `-verify-rate 0`, `-verify-seed 1`, and `-verify-timeout-sec 30`.
+- **Verification runs:** when a sampled task completes, exactly one verification is queued. It may only be leased to a worker whose `workerId` differs from the worker that supplied the accepted original result. Eligible verifications have priority over normal queued tasks. The coordinator may issue the same `taskId` again with a fresh attempt number (the current maximum attempt plus one). The worker is not told that this is a verification run. A verification result is recognized by the active verification lease held by its submitting worker, not by its attempt number; it is compared with the original and is never submitted to the normal result reducer or reported as a duplicate.
+- **Verification outcomes:** a matching rerun increments `matched`. A mismatch leaves the original task result accepted and increments `mismatched`; `/api/job.verify.mismatches` records the task ID, original worker ID, verifier worker ID, and both opaque JSON results. If a queued verification is not leased within `verify-timeout` after it was queued, it is marked `skipped`. A verification lease held by a worker that is lost returns to the verification queue. Heartbeats extend verification leases only when that task ID is listed in `running` and held by that worker. Workers must list every task they are running. A single-worker job therefore completes sampled verifications by skipping them after the timeout. The job is not done, and pulls do not return `done`, until all tasks and all sampled verifications have terminal outcomes (`matched`, `mismatched`, or `skipped`).
 - **Joining during a job:** workers may join after the job begins. Before the job is started, pulls return `wait`.
 - **No remote code:** workers select built-in executors by task `kind`; executable code is never transmitted.
 - **Authentication:** v1 has none and is intended for a trusted LAN.

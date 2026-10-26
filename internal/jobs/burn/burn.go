@@ -93,3 +93,18 @@ func (r *Reducer) WrongTasks() []string {
 	}
 	return out
 }
+
+// Verifier compares burn results by their parsed uint64 checksum value.
+type Verifier struct{}
+
+func NewVerifier() Verifier { return Verifier{} }
+
+func (Verifier) Match(_ sched.TaskSpec, original, rerun []byte) bool {
+	var first, second proto.BurnResult
+	if json.Unmarshal(original, &first) != nil || json.Unmarshal(rerun, &second) != nil {
+		return false
+	}
+	a, errA := strconv.ParseUint(first.Checksum, 10, 64)
+	b, errB := strconv.ParseUint(second.Checksum, 10, 64)
+	return errA == nil && errB == nil && a == b
+}
