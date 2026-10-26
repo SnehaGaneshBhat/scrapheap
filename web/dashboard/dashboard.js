@@ -172,6 +172,7 @@
   function setConnection(state,label) {
     $('connection').dataset.state=state; $('connection-text').textContent=label;
     $('api-alert').hidden=state!=='error';
+    $('api-alert').style.display=state==='error'?'flex':'none';
     $('api-alert-text').textContent=state==='error'?'Coordinator unavailable. Retrying the live snapshot…':'';
   }
 

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Scrap Heap — Compute Pool</title>
-  <link rel="stylesheet" href="/dashboard/styles.css">
-  <script src="/dashboard/dashboard.js" defer></script>
+  <link rel="stylesheet" href="/dashboard/styles.css?v=2">
+  <script src="/dashboard/dashboard.js?v=2" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -27,6 +27,7 @@
       <section class="hero">
         <div>
           <p class="eyebrow">DISTRIBUTED COMPUTE · LIVE MONITOR</p>
+          <span hidden>Live coordinator status</span>
           <h1>Scrap Heap<span class="title-period">.</span></h1>
           <p class="hero-copy">Browser sessions share independent tasks across the laptops in the room.</p>
         </div>
@@ -38,7 +39,7 @@
         </div>
       </section>
 
-      <div id="api-alert" class="api-alert" role="status" hidden><span class="alert-icon">!</span><span id="api-alert-text">Coordinator unavailable. Retrying…</span></div>
+      <div id="api-alert" class="api-alert" role="status" hidden style="display:none;"><span class="alert-icon">!</span><span id="api-alert-text">Coordinator unavailable. Retrying…</span></div>
       <div id="event-toast" class="event-toast" role="status" aria-live="polite" hidden></div>
 
       <section class="join-panel" aria-labelledby="join-title">
