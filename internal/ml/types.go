@@ -2,14 +2,17 @@ package ml
 
 import "errors"
 
-// Config is an MNIST training configuration. JSON names match the pending
-// MNIST payload proposal in docs/protocol.md.
+// Config is an MNIST training configuration. JSON names follow the pending
+// MNIST payload proposal in docs/protocol.md. A zero TrainRows uses all
+// available training examples; a positive value selects the deterministic
+// prefix of that set.
 type Config struct {
-	Hidden int     `json:"hidden"`
-	LR     float64 `json:"lr"`
-	Epochs int     `json:"epochs"`
-	Batch  int     `json:"batch"`
-	Seed   int     `json:"seed"`
+	Hidden    int     `json:"hidden"`
+	LR        float64 `json:"lr"`
+	Epochs    int     `json:"epochs"`
+	Batch     int     `json:"batch"`
+	Seed      int     `json:"seed"`
+	TrainRows int     `json:"trainRows,omitempty"`
 }
 
 // Result contains validation-only metrics from a training run.

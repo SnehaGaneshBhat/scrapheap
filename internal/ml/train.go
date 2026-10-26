@@ -25,9 +25,14 @@ func Train(cfg Config, d *Data) (Result, error) {
 		return Result{}, &Error{Op: "Train", Err: err}
 	}
 
-	inputSize := len(d.Train[0].Pixels)
+	trainingRows := len(d.Train)
+	if cfg.TrainRows > 0 {
+		trainingRows = cfg.TrainRows
+	}
+	trainExamples := d.Train[:trainingRows]
+	inputSize := len(trainExamples[0].Pixels)
 	network := newModel(cfg, inputSize)
-	order := make([]int, len(d.Train))
+	order := make([]int, len(trainExamples))
 	for i := range order {
 		order[i] = i
 	}
@@ -41,7 +46,7 @@ func Train(cfg Config, d *Data) (Result, error) {
 				batchSize = remaining
 			}
 			batchEnd := batchStart + batchSize
-			if err := trainBatch(network, d.Train, order[batchStart:batchEnd], cfg.LR); err != nil {
+			if err := trainBatch(network, trainExamples, order[batchStart:batchEnd], cfg.LR); err != nil {
 				return Result{}, &Error{Op: "Train", Err: err}
 			}
 			batchStart = batchEnd
@@ -83,6 +88,12 @@ func validateTrainingInput(cfg Config, d *Data) error {
 	if len(d.Train) == 0 {
 		return errors.New("training set must not be empty")
 	}
+	if cfg.TrainRows < 0 {
+		return errors.New("trainRows must not be negative")
+	}
+	if cfg.TrainRows > len(d.Train) {
+		return fmt.Errorf("trainRows %d exceeds training set size %d", cfg.TrainRows, len(d.Train))
+	}
 	if len(d.Validation) == 0 {
 		return errors.New("validation set must not be empty")
 	}
@@ -102,6 +113,14 @@ func validateTrainingInput(cfg Config, d *Data) error {
 		return err
 	}
 	return nil
+}
+
+// EstimateCost returns the planned hidden-size × epochs × rows work proxy.
+func EstimateCost(cfg Config, rows int) (float64, error) {
+	if cfg.Hidden <= 0 || cfg.Epochs <= 0 || rows <= 0 {
+		return 0, errors.New("hidden size, epochs, and rows must be positive")
+	}
+	return float64(cfg.Hidden) * float64(cfg.Epochs) * float64(rows), nil
 }
 
 func validateExamples(examples []Example, inputSize int, setName string) error {
