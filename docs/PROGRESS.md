@@ -71,3 +71,36 @@
   - The default Go module cache directory is not writable in this environment; Go build still returned success, but reported failure to write its stat cache.
 - What the next task depends on:
   - Server/scheduler integration must apply the documented current-job check before accepting a RESULT and send WELCOME after HELLO acceptance.
+
+## Protocol: align with worker contract (2026-10-26 10:45 Asia/Calcutta)
+
+- What was built:
+  - Added Web Worker count to HELLO and validated a SHA-256 hex digest in BENCH_RESULT.
+  - Added JOB_STARTED support with a job ID and documented broadcast and task-request lifecycle semantics.
+  - Defined fixed benchmark tile constants and documented the kernel signature, endpoints, and frame transport.
+  - Updated JSON and binary examples and added protocol tests for the new contract.
+- Files created/changed:
+  - `internal/proto/proto.go` — extended JSON message fields/types and added benchmark tile constants/helper.
+  - `internal/proto/proto_test.go` — round-trip, invalid message, and benchmark-constant coverage.
+  - `docs/protocol.md` — worker lifecycle, endpoints, kernel contract, benchmark inputs, and refreshed wire examples.
+  - `docs/PROGRESS.md` — this task report.
+  - `README.md` — surfaced worker endpoints and protocol documentation.
+- Public interfaces:
+  - `Message` adds `Threads int` and `Hash string`; `MessageJobStarted` adds the JOB_STARTED JSON type.
+  - `BenchTileW`, `BenchTileH`, `BenchTileMaxIter`, `BenchTileX0`, `BenchTileY0`, and `BenchTileScale` define the benchmark inputs; `BenchTile() Task` returns them.
+  - JSON formats: HELLO includes `threads`; BENCH_RESULT includes `hash`; JOB_STARTED contains `jobId`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - HELLO validation requires both `cores` and `threads` to be positive.
+  - BENCH_RESULT accepts 64-character SHA-256 hexadecimal text in either letter case; its digest is computed over RGBA bytes only.
+  - `BenchTile()` returns a Task with zero job/task/attempt metadata; callers supply those fields when needed.
+- Known issues / TODOs / things you were unsure about:
+  - The coordinator and worker UI are not in this task's edit scope, so endpoint handlers, JOB_STARTED broadcasts, held-request clearing, and post-WELCOME/JOB_STARTED requests remain to be implemented by their owners.
+  - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
+- What the next task depends on:
+  - Worker implementation should use the exact documented BenchTile constants and hash the returned RGBA bytes; server integration should follow the documented JOB_STARTED/WELCOME request lifecycle.

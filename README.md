@@ -18,6 +18,12 @@ go build ./...
 go test ./...
 ```
 
+## Worker contract
+
+Workers connect to `/ws/worker`; the dashboard connects to `/ws/dash`. See
+[docs/protocol.md](docs/protocol.md) for message formats, binary frames, job
+lifecycle, and the shared benchmark tile constants.
+
 ## Run
 
 The HTTP/WebSocket coordinator is not implemented yet. When it is added, start it
@@ -26,5 +32,3 @@ from the repository root with:
 ```powershell
 go run ./cmd/server
 ```
-
-See [docs/protocol.md](docs/protocol.md) for the worker wire contract.

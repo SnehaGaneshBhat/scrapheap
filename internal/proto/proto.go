@@ -3,6 +3,7 @@ package proto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ const (
 	MessageAck         MessageType = "ACK"
 	MessageJobDone     MessageType = "JOB_DONE"
 	MessageWelcome     MessageType = "WELCOME"
+	MessageJobStarted  MessageType = "JOB_STARTED"
 )
 
 // Message is the JSON control-message envelope. Fields not used by Type are omitted.
@@ -29,7 +31,9 @@ type Message struct {
 	DeviceID            string      `json:"deviceId,omitempty"`
 	UserAgent           string      `json:"userAgent,omitempty"`
 	Cores               uint32      `json:"cores,omitempty"`
+	Threads             int         `json:"threads,omitempty"`
 	TilesPerSec         float64     `json:"tilesPerSec,omitempty"`
+	Hash                string      `json:"hash,omitempty"`
 	TaskID              uint32      `json:"taskId,omitempty"`
 	Attempt             uint32      `json:"attempt,omitempty"`
 	JobID               uint32      `json:"jobId,omitempty"`
@@ -70,6 +74,13 @@ const (
 	MaxTileDim       = 256
 	TaskHeaderSize   = 49
 	ResultHeaderSize = 21
+
+	BenchTileW       uint16 = 64
+	BenchTileH       uint16 = 64
+	BenchTileMaxIter uint32 = 256
+	BenchTileX0             = -0.75
+	BenchTileY0             = 0.1
+	BenchTileScale          = 0.005
 )
 
 var (
@@ -89,6 +100,11 @@ type UnknownFrameTypeError struct{ Type byte }
 
 func (e *UnknownFrameTypeError) Error() string {
 	return fmt.Sprintf("unknown binary frame type 0x%02x", e.Type)
+}
+
+// BenchTile returns the fixed render parameters used to benchmark kernel speed and output.
+func BenchTile() Task {
+	return Task{X0: BenchTileX0, Y0: BenchTileY0, Scale: BenchTileScale, W: BenchTileW, H: BenchTileH, MaxIter: BenchTileMaxIter}
 }
 
 // EncodeJSON validates and encodes one JSON control message.
@@ -131,15 +147,17 @@ func messageValues(msg Message) map[string]any {
 	fields := map[string]any{"type": msg.Type}
 	switch msg.Type {
 	case MessageHello:
-		fields["deviceId"], fields["userAgent"], fields["cores"] = msg.DeviceID, msg.UserAgent, msg.Cores
+		fields["deviceId"], fields["userAgent"], fields["cores"], fields["threads"] = msg.DeviceID, msg.UserAgent, msg.Cores, msg.Threads
 	case MessageBenchResult:
-		fields["tilesPerSec"] = msg.TilesPerSec
+		fields["tilesPerSec"], fields["hash"] = msg.TilesPerSec, msg.Hash
 	case MessageAck:
 		fields["taskId"], fields["attempt"], fields["jobId"] = msg.TaskID, msg.Attempt, msg.JobID
 	case MessageJobDone:
 		fields["jobId"] = msg.JobID
 	case MessageWelcome:
 		fields["heartbeatIntervalMs"], fields["heartbeatTimeoutMs"] = msg.HeartbeatIntervalMs, msg.HeartbeatTimeoutMs
+	case MessageJobStarted:
+		fields["jobId"] = msg.JobID
 	}
 	return fields
 }
@@ -166,22 +184,30 @@ func validateMessageFields(msg Message, fields map[string]json.RawMessage) error
 	}
 	switch msg.Type {
 	case MessageHello:
-		allow("deviceId", "userAgent", "cores")
-		for _, name := range []string{"deviceId", "userAgent", "cores"} {
+		allow("deviceId", "userAgent", "cores", "threads")
+		for _, name := range []string{"deviceId", "userAgent", "cores", "threads"} {
 			if err := require(name); err != nil {
 				return err
 			}
 		}
-		if msg.DeviceID == "" || msg.Cores == 0 {
-			return fmt.Errorf("%w: HELLO requires deviceId and cores > 0", ErrInvalidMessage)
+		if msg.DeviceID == "" || msg.Cores == 0 || msg.Threads <= 0 {
+			return fmt.Errorf("%w: HELLO requires deviceId, cores > 0, and threads > 0", ErrInvalidMessage)
 		}
 	case MessageBenchResult:
-		allow("tilesPerSec")
-		if err := require("tilesPerSec"); err != nil {
-			return err
+		allow("tilesPerSec", "hash")
+		for _, name := range []string{"tilesPerSec", "hash"} {
+			if err := require(name); err != nil {
+				return err
+			}
 		}
 		if msg.TilesPerSec <= 0 || math.IsInf(msg.TilesPerSec, 0) || math.IsNaN(msg.TilesPerSec) {
 			return fmt.Errorf("%w: tilesPerSec must be finite and > 0", ErrInvalidMessage)
+		}
+		if len(msg.Hash) != 64 {
+			return fmt.Errorf("%w: hash must be a 64-character SHA-256 hex digest", ErrInvalidMessage)
+		}
+		if _, err := hex.DecodeString(msg.Hash); err != nil {
+			return fmt.Errorf("%w: hash must be hexadecimal: %v", ErrInvalidMessage, err)
 		}
 	case MessageRequestTask, MessageHeartbeat, MessageJobDone:
 		if msg.Type == MessageJobDone {
@@ -209,6 +235,11 @@ func validateMessageFields(msg Message, fields map[string]json.RawMessage) error
 		}
 		if msg.HeartbeatIntervalMs == 0 || msg.HeartbeatTimeoutMs == 0 {
 			return fmt.Errorf("%w: WELCOME heartbeat intervals must be > 0", ErrInvalidMessage)
+		}
+	case MessageJobStarted:
+		allow("jobId")
+		if err := require("jobId"); err != nil {
+			return err
 		}
 	default:
 		return &UnknownMessageTypeError{Type: string(msg.Type)}
