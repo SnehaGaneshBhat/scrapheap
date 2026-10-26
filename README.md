@@ -1,8 +1,8 @@
 # Scrap Heap backend
 
-Go backend for the Scrap Heap distributed Mandelbrot renderer. The repository is
-being scaffolded; the protocol package is available, while the coordinator server
-and worker-facing UI are future tasks.
+Go backend for the Scrap Heap distributed Mandelbrot renderer. The protocol
+package is available; coordinator HTTP/WebSocket service and worker UI are
+future tasks.
 
 ## Requirements
 
@@ -12,9 +12,10 @@ and worker-facing UI are future tasks.
 ## Build and verify
 
 ```powershell
-go build ./...
+go fmt ./...
 go vet ./...
-go test ./... -race
+go build ./...
+go test ./...
 ```
 
 ## Run

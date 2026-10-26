@@ -1,12 +1,13 @@
 # Progress log
 
 ## Scaffold and protocol (2026-10-26 10:26 Asia/Calcutta)
-- What was built: 2-5 bullets
+
+- What was built:
   - Initialized the Go 1.22 module and added a Windows-focused README with build, test, and run commands.
   - Added typed JSON control-message handling for HELLO, BENCH_RESULT, REQUEST_TASK, HEARTBEAT, ACK, and JOB_DONE.
   - Added fixed little-endian TASK and RESULT binary frame encoders/decoders with validation.
   - Documented byte layouts and sample hex frames; added table-driven round-trip and malformed-input tests.
-- Files created/changed: list with one-line purpose each
+- Files created/changed:
   - `go.mod` — declares module `github.com/scrap-heap/backend` with Go 1.22 minimum.
   - `README.md` — project stub and Windows Go commands.
   - `cmd/server/main.go` — placeholder entry point until the coordinator is implemented.
@@ -14,26 +15,59 @@
   - `internal/proto/proto_test.go` — protocol round-trip, malformed-input, and validation tests.
   - `docs/protocol.md` — worker-facing JSON and binary wire contract with hex examples.
   - `docs/PROGRESS.md` — this task report.
-- Public interfaces: exported types, function signatures, message formats, endpoints
+- Public interfaces:
   - `MessageType`, constants `MessageHello`, `MessageBenchResult`, `MessageRequestTask`, `MessageHeartbeat`, `MessageAck`, `MessageJobDone`.
   - `Message`, `Task`, and `Result` structs.
   - `EncodeJSON(Message) ([]byte, error)` and `DecodeJSON([]byte) (Message, error)`.
   - `EncodeTask(Task) ([]byte, error)`, `DecodeTask([]byte) (Task, error)`.
   - `EncodeResult(Result) ([]byte, error)`, `DecodeResult([]byte) (Result, error)`.
   - Binary frame types `0x01` TASK and `0x02` RESULT; fixed headers of 45 and 17 bytes respectively.
-- How to run/test: exact commands, and the actual results you saw (pass/fail counts)
+- How to run/test:
   - `go fmt ./...` — passed.
   - `go build ./...` — passed (exit 0).
   - `go vet ./...` — passed (exit 0).
-  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and all protocol tests passed (6 test functions, including 26 table cases).
+  - `go test ./...` — passed; `cmd/server` has no tests and all protocol tests passed.
   - `go test ./... -race` — failed before test execution because `C:\MinGW\bin\gcc.exe` exited with Windows `Illegal System DLL Relocation`; ordinary tests passed without race instrumentation.
-  - Go commands used `GOMODCACHE=C:\Users\manav\.codex\visualizations\2026\10\26\01a1768c-21c4-7d50-b994-7960d5d3627a\gomodcache` because the default module cache directory denied writes.
-- Decisions & deviations from this spec, and why
+  - Commands used a task-workspace `GOMODCACHE` after the default module cache denied writes.
+- Decisions & deviations from this spec, and why:
   - `computeMs` is encoded as uint32 little-endian milliseconds, making the result header 17 bytes total.
   - Module path selected as `github.com/scrap-heap/backend` because no remote module path was available.
-  - The coordinator entry point only reports that the server is not implemented yet; HTTP/WebSocket work is outside this task.
-- Known issues / TODOs / things you were unsure about
+  - The coordinator entry point only reports that the server is not implemented yet; HTTP/WebSocket work is outside that task.
+- Known issues / TODOs / things you were unsure about:
   - The coordinator entry point is a placeholder; HTTP/WebSocket service work remains.
   - Race-instrumented tests remain unverified until the local GCC/Windows runtime issue is resolved.
-- What the next task depends on
-  - Server work can now use the protocol package; browser implementation should follow `docs/protocol.md`.
+- What the next task depends on:
+  - Server work can use the protocol package; browser implementation should follow `docs/protocol.md`.
+
+## Protocol hardening (2026-10-26 10:34 Asia/Calcutta)
+
+- What was built:
+  - Added `jobId` to TASK and RESULT binary headers and to ACK and JOB_DONE JSON messages.
+  - Added WELCOME JSON support with heartbeat interval and timeout fields.
+  - Added tile dimension and exact payload-length checks, plus typed errors for unknown message and frame types.
+  - Updated the wire specification and expanded round-trip, stale-job, malformed-frame, and byte-layout tests.
+- Files created/changed:
+  - `internal/proto/proto.go` — updated protocol data types, encoders/decoders, validation, and typed errors.
+  - `internal/proto/proto_test.go` — round-trip, exact bytes, stale job ID, and malformed-input coverage.
+  - `docs/protocol.md` — updated JSON contract, byte tables, sizes, limits, and hex examples.
+  - `docs/PROGRESS.md` — corrected prior headings and added this report.
+  - `README.md` — updated the verification commands to include formatting and ordinary tests.
+- Public interfaces:
+  - Added `MessageWelcome`; `Message` now includes `JobID`, `HeartbeatIntervalMs`, and `HeartbeatTimeoutMs`.
+  - `Task` and `Result` now include `JobID`; TASK header is 49 bytes and RESULT header is 21 bytes.
+  - Added `MaxTileDim` (256), `UnknownMessageTypeError`, and `UnknownFrameTypeError`.
+  - Existing `EncodeJSON`, `DecodeJSON`, `EncodeTask`, `DecodeTask`, `EncodeResult`, and `DecodeResult` signatures remain unchanged.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0, with a Go module stat-cache access-denied warning from the default cache path.
+  - `go test ./...` — passed (exit 0); server package has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set for this task.
+- Decisions & deviations from this spec, and why:
+  - `UnknownMessageTypeError` is returned for unknown JSON type values; `UnknownFrameTypeError` identifies unknown binary frame discriminator bytes.
+  - The protocol layer carries job IDs and documents stale-result dropping for the future server/scheduler; no server files are in this task's permitted edit scope.
+- Known issues / TODOs / things you were unsure about:
+  - The coordinator still needs to send WELCOME after accepting HELLO, increment job IDs on job start/reset, and discard results with a non-current job ID.
+  - The default Go module cache directory is not writable in this environment; Go build still returned success, but reported failure to write its stat cache.
+- What the next task depends on:
+  - Server/scheduler integration must apply the documented current-job check before accepting a RESULT and send WELCOME after HELLO acceptance.

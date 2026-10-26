@@ -20,21 +20,26 @@ const (
 	MessageHeartbeat   MessageType = "HEARTBEAT"
 	MessageAck         MessageType = "ACK"
 	MessageJobDone     MessageType = "JOB_DONE"
+	MessageWelcome     MessageType = "WELCOME"
 )
 
 // Message is the JSON control-message envelope. Fields not used by Type are omitted.
 type Message struct {
-	Type        MessageType `json:"type"`
-	DeviceID    string      `json:"deviceId,omitempty"`
-	UserAgent   string      `json:"userAgent,omitempty"`
-	Cores       uint32      `json:"cores,omitempty"`
-	TilesPerSec float64     `json:"tilesPerSec,omitempty"`
-	TaskID      uint32      `json:"taskId,omitempty"`
-	Attempt     uint32      `json:"attempt,omitempty"`
+	Type                MessageType `json:"type"`
+	DeviceID            string      `json:"deviceId,omitempty"`
+	UserAgent           string      `json:"userAgent,omitempty"`
+	Cores               uint32      `json:"cores,omitempty"`
+	TilesPerSec         float64     `json:"tilesPerSec,omitempty"`
+	TaskID              uint32      `json:"taskId,omitempty"`
+	Attempt             uint32      `json:"attempt,omitempty"`
+	JobID               uint32      `json:"jobId,omitempty"`
+	HeartbeatIntervalMs uint32      `json:"heartbeatIntervalMs,omitempty"`
+	HeartbeatTimeoutMs  uint32      `json:"heartbeatTimeoutMs,omitempty"`
 }
 
 // Task contains render parameters transported in a TASK binary frame.
 type Task struct {
+	JobID   uint32
 	TaskID  uint32
 	Attempt uint32
 	X       uint16
@@ -49,6 +54,7 @@ type Task struct {
 
 // Result contains a RESULT header and tightly packed row-major RGBA bytes.
 type Result struct {
+	JobID     uint32
 	TaskID    uint32
 	Attempt   uint32
 	W         uint16
@@ -61,14 +67,29 @@ const (
 	FrameTask   byte = 0x01
 	FrameResult byte = 0x02
 
-	TaskHeaderSize   = 45
-	ResultHeaderSize = 17
+	MaxTileDim       = 256
+	TaskHeaderSize   = 49
+	ResultHeaderSize = 21
 )
 
 var (
 	ErrMalformedFrame = errors.New("malformed binary frame")
 	ErrInvalidMessage = errors.New("invalid control message")
 )
+
+// UnknownMessageTypeError identifies an unsupported JSON control-message type.
+type UnknownMessageTypeError struct{ Type string }
+
+func (e *UnknownMessageTypeError) Error() string {
+	return fmt.Sprintf("unknown control message type %q", e.Type)
+}
+
+// UnknownFrameTypeError identifies an unsupported binary frame discriminator.
+type UnknownFrameTypeError struct{ Type byte }
+
+func (e *UnknownFrameTypeError) Error() string {
+	return fmt.Sprintf("unknown binary frame type 0x%02x", e.Type)
+}
 
 // EncodeJSON validates and encodes one JSON control message.
 func EncodeJSON(msg Message) ([]byte, error) {
@@ -114,7 +135,11 @@ func messageValues(msg Message) map[string]any {
 	case MessageBenchResult:
 		fields["tilesPerSec"] = msg.TilesPerSec
 	case MessageAck:
-		fields["taskId"], fields["attempt"] = msg.TaskID, msg.Attempt
+		fields["taskId"], fields["attempt"], fields["jobId"] = msg.TaskID, msg.Attempt, msg.JobID
+	case MessageJobDone:
+		fields["jobId"] = msg.JobID
+	case MessageWelcome:
+		fields["heartbeatIntervalMs"], fields["heartbeatTimeoutMs"] = msg.HeartbeatIntervalMs, msg.HeartbeatTimeoutMs
 	}
 	return fields
 }
@@ -159,9 +184,15 @@ func validateMessageFields(msg Message, fields map[string]json.RawMessage) error
 			return fmt.Errorf("%w: tilesPerSec must be finite and > 0", ErrInvalidMessage)
 		}
 	case MessageRequestTask, MessageHeartbeat, MessageJobDone:
+		if msg.Type == MessageJobDone {
+			allow("jobId")
+			if err := require("jobId"); err != nil {
+				return err
+			}
+		}
 	case MessageAck:
-		allow("taskId", "attempt")
-		for _, name := range []string{"taskId", "attempt"} {
+		allow("taskId", "attempt", "jobId")
+		for _, name := range []string{"taskId", "attempt", "jobId"} {
 			if err := require(name); err != nil {
 				return err
 			}
@@ -169,8 +200,18 @@ func validateMessageFields(msg Message, fields map[string]json.RawMessage) error
 		if msg.Attempt == 0 {
 			return fmt.Errorf("%w: ACK attempt must be > 0", ErrInvalidMessage)
 		}
+	case MessageWelcome:
+		allow("heartbeatIntervalMs", "heartbeatTimeoutMs")
+		for _, name := range []string{"heartbeatIntervalMs", "heartbeatTimeoutMs"} {
+			if err := require(name); err != nil {
+				return err
+			}
+		}
+		if msg.HeartbeatIntervalMs == 0 || msg.HeartbeatTimeoutMs == 0 {
+			return fmt.Errorf("%w: WELCOME heartbeat intervals must be > 0", ErrInvalidMessage)
+		}
 	default:
-		return fmt.Errorf("%w: unknown type %q", ErrInvalidMessage, msg.Type)
+		return &UnknownMessageTypeError{Type: string(msg.Type)}
 	}
 	for name := range fields {
 		if !allowed[name] {
@@ -180,39 +221,47 @@ func validateMessageFields(msg Message, fields map[string]json.RawMessage) error
 	return nil
 }
 
-// EncodeTask encodes a TASK frame using the fixed 45-byte little-endian header.
+// EncodeTask encodes a TASK frame using the fixed 49-byte little-endian header.
 func EncodeTask(task Task) ([]byte, error) {
 	if !validTask(task) {
 		return nil, fmt.Errorf("%w: invalid TASK values", ErrMalformedFrame)
 	}
 	out := make([]byte, TaskHeaderSize)
 	out[0] = FrameTask
-	binary.LittleEndian.PutUint32(out[1:5], task.TaskID)
-	binary.LittleEndian.PutUint32(out[5:9], task.Attempt)
-	binary.LittleEndian.PutUint16(out[9:11], task.X)
-	binary.LittleEndian.PutUint16(out[11:13], task.Y)
-	binary.LittleEndian.PutUint16(out[13:15], task.W)
-	binary.LittleEndian.PutUint16(out[15:17], task.H)
-	binary.LittleEndian.PutUint64(out[17:25], math.Float64bits(task.X0))
-	binary.LittleEndian.PutUint64(out[25:33], math.Float64bits(task.Y0))
-	binary.LittleEndian.PutUint64(out[33:41], math.Float64bits(task.Scale))
-	binary.LittleEndian.PutUint32(out[41:45], task.MaxIter)
+	binary.LittleEndian.PutUint32(out[1:5], task.JobID)
+	binary.LittleEndian.PutUint32(out[5:9], task.TaskID)
+	binary.LittleEndian.PutUint32(out[9:13], task.Attempt)
+	binary.LittleEndian.PutUint16(out[13:15], task.X)
+	binary.LittleEndian.PutUint16(out[15:17], task.Y)
+	binary.LittleEndian.PutUint16(out[17:19], task.W)
+	binary.LittleEndian.PutUint16(out[19:21], task.H)
+	binary.LittleEndian.PutUint64(out[21:29], math.Float64bits(task.X0))
+	binary.LittleEndian.PutUint64(out[29:37], math.Float64bits(task.Y0))
+	binary.LittleEndian.PutUint64(out[37:45], math.Float64bits(task.Scale))
+	binary.LittleEndian.PutUint32(out[45:49], task.MaxIter)
 	return out, nil
 }
 
 // DecodeTask validates and decodes one complete TASK frame.
 func DecodeTask(data []byte) (Task, error) {
+	if len(data) == 0 {
+		return Task{}, fmt.Errorf("%w: TASK frame is empty", ErrMalformedFrame)
+	}
+	if data[0] != FrameTask && data[0] != FrameResult {
+		return Task{}, &UnknownFrameTypeError{Type: data[0]}
+	}
 	if len(data) != TaskHeaderSize || data[0] != FrameTask {
 		return Task{}, fmt.Errorf("%w: TASK must be exactly %d bytes", ErrMalformedFrame, TaskHeaderSize)
 	}
 	task := Task{
-		TaskID: binary.LittleEndian.Uint32(data[1:5]), Attempt: binary.LittleEndian.Uint32(data[5:9]),
-		X: binary.LittleEndian.Uint16(data[9:11]), Y: binary.LittleEndian.Uint16(data[11:13]),
-		W: binary.LittleEndian.Uint16(data[13:15]), H: binary.LittleEndian.Uint16(data[15:17]),
-		X0:      math.Float64frombits(binary.LittleEndian.Uint64(data[17:25])),
-		Y0:      math.Float64frombits(binary.LittleEndian.Uint64(data[25:33])),
-		Scale:   math.Float64frombits(binary.LittleEndian.Uint64(data[33:41])),
-		MaxIter: binary.LittleEndian.Uint32(data[41:45]),
+		JobID:  binary.LittleEndian.Uint32(data[1:5]),
+		TaskID: binary.LittleEndian.Uint32(data[5:9]), Attempt: binary.LittleEndian.Uint32(data[9:13]),
+		X: binary.LittleEndian.Uint16(data[13:15]), Y: binary.LittleEndian.Uint16(data[15:17]),
+		W: binary.LittleEndian.Uint16(data[17:19]), H: binary.LittleEndian.Uint16(data[19:21]),
+		X0:      math.Float64frombits(binary.LittleEndian.Uint64(data[21:29])),
+		Y0:      math.Float64frombits(binary.LittleEndian.Uint64(data[29:37])),
+		Scale:   math.Float64frombits(binary.LittleEndian.Uint64(data[37:45])),
+		MaxIter: binary.LittleEndian.Uint32(data[45:49]),
 	}
 	if !validTask(task) {
 		return Task{}, fmt.Errorf("%w: invalid TASK values", ErrMalformedFrame)
@@ -221,7 +270,7 @@ func DecodeTask(data []byte) (Task, error) {
 }
 
 func validTask(task Task) bool {
-	return task.W != 0 && task.H != 0 && task.Attempt != 0 && task.MaxIter != 0 &&
+	return validTileDims(task.W, task.H) && task.Attempt != 0 && task.MaxIter != 0 &&
 		finite(task.X0) && finite(task.Y0) && finite(task.Scale) && task.Scale > 0
 }
 
@@ -233,24 +282,32 @@ func EncodeResult(result Result) ([]byte, error) {
 	}
 	out := make([]byte, ResultHeaderSize+len(result.RGBA))
 	out[0] = FrameResult
-	binary.LittleEndian.PutUint32(out[1:5], result.TaskID)
-	binary.LittleEndian.PutUint32(out[5:9], result.Attempt)
-	binary.LittleEndian.PutUint16(out[9:11], result.W)
-	binary.LittleEndian.PutUint16(out[11:13], result.H)
-	binary.LittleEndian.PutUint32(out[13:17], result.ComputeMs)
+	binary.LittleEndian.PutUint32(out[1:5], result.JobID)
+	binary.LittleEndian.PutUint32(out[5:9], result.TaskID)
+	binary.LittleEndian.PutUint32(out[9:13], result.Attempt)
+	binary.LittleEndian.PutUint16(out[13:15], result.W)
+	binary.LittleEndian.PutUint16(out[15:17], result.H)
+	binary.LittleEndian.PutUint32(out[17:21], result.ComputeMs)
 	copy(out[ResultHeaderSize:], result.RGBA)
 	return out, nil
 }
 
 // DecodeResult validates and decodes one complete RESULT frame.
 func DecodeResult(data []byte) (Result, error) {
+	if len(data) == 0 {
+		return Result{}, fmt.Errorf("%w: RESULT frame is empty", ErrMalformedFrame)
+	}
+	if data[0] != FrameTask && data[0] != FrameResult {
+		return Result{}, &UnknownFrameTypeError{Type: data[0]}
+	}
 	if len(data) < ResultHeaderSize || data[0] != FrameResult {
 		return Result{}, fmt.Errorf("%w: RESULT header is incomplete or has wrong type", ErrMalformedFrame)
 	}
 	result := Result{
-		TaskID: binary.LittleEndian.Uint32(data[1:5]), Attempt: binary.LittleEndian.Uint32(data[5:9]),
-		W: binary.LittleEndian.Uint16(data[9:11]), H: binary.LittleEndian.Uint16(data[11:13]),
-		ComputeMs: binary.LittleEndian.Uint32(data[13:17]),
+		JobID:  binary.LittleEndian.Uint32(data[1:5]),
+		TaskID: binary.LittleEndian.Uint32(data[5:9]), Attempt: binary.LittleEndian.Uint32(data[9:13]),
+		W: binary.LittleEndian.Uint16(data[13:15]), H: binary.LittleEndian.Uint16(data[15:17]),
+		ComputeMs: binary.LittleEndian.Uint32(data[17:21]),
 	}
 	payloadSize, ok := rgbaSize(result.W, result.H)
 	if !ok || result.Attempt == 0 || payloadSize != uint64(len(data)-ResultHeaderSize) {
@@ -261,10 +318,16 @@ func DecodeResult(data []byte) (Result, error) {
 }
 
 func rgbaSize(w, h uint16) (uint64, bool) {
-	if w == 0 || h == 0 {
+	if !validTileDims(w, h) {
 		return 0, false
 	}
-	return uint64(w) * uint64(h) * 4, true
+	width, height := uint64(w), uint64(h)
+	if width > math.MaxUint64/height/4 {
+		return 0, false
+	}
+	return width * height * 4, true
 }
+
+func validTileDims(w, h uint16) bool { return w > 0 && h > 0 && w <= MaxTileDim && h <= MaxTileDim }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
