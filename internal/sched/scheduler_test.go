@@ -2,353 +2,251 @@ package sched
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
-
-	"github.com/scrap-heap/backend/internal/proto"
 )
 
-var fakeStart = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+type taskList []TaskSpec
 
-func testTask(id uint32) proto.Task {
-	t := proto.BenchTile()
-	t.TaskID = id
-	return t
+func (tasks taskList) Tasks() []TaskSpec { return tasks }
+
+type recordingReducer struct {
+	seen    map[string]int
+	workers map[string]string
 }
 
-func startTiles(s *Scheduler, now time.Time, jobID uint32, costs ...float64) []Action {
-	tiles := make([]Tile, len(costs))
-	for i, cost := range costs {
-		tiles[i] = Tile{Task: testTask(uint32(i)), EstimatedCost: cost}
-	}
-	return s.Handle(StartJob{Now: now, JobID: jobID, Tiles: tiles})
+func (r *recordingReducer) Accept(spec TaskSpec, result []byte, workerID string) {
+	r.seen[spec.ID]++
+	r.workers[spec.ID] = workerID
 }
 
-func assignments(actions []Action) []AssignTask {
-	out := make([]AssignTask, 0)
-	for _, action := range actions {
-		if a, ok := action.(AssignTask); ok {
-			out = append(out, a)
-		}
+func newReducer() *recordingReducer {
+	return &recordingReducer{seen: make(map[string]int), workers: make(map[string]string)}
+}
+
+func makeTasks(count int) taskList {
+	out := make(taskList, count)
+	for i := range count {
+		out[i] = TaskSpec{ID: fmt.Sprintf("task-%04d", i), Kind: "opaque-kind", Payload: []byte(`{"n":1}`), Cost: 1}
 	}
 	return out
 }
 
-func hasAction[T Action](actions []Action) bool {
-	for _, action := range actions {
-		if _, ok := action.(T); ok {
-			return true
+func newTestScheduler(tasks taskList, reducer Reducer) *Scheduler {
+	return New(Config{LeaseDur: 2 * time.Second, HeartbeatTimeout: 10 * time.Second}, tasks, reducer)
+}
+
+func startTime() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }
+
+func TestLifecycleScenarios(t *testing.T) {
+	t.Run("normal completion", func(t *testing.T) {
+		now := startTime()
+		r := newReducer()
+		s := newTestScheduler(makeTasks(1), r)
+		id, rejoined := s.Hello("alpha", WorkerInfo{CPU: "cpu"}, now)
+		if rejoined {
+			t.Fatal("first hello unexpectedly rejoined")
 		}
-	}
-	return false
-}
-
-func firstAssignment(t *testing.T, actions []Action) AssignTask {
-	t.Helper()
-	got := assignments(actions)
-	if len(got) != 1 {
-		t.Fatalf("got %d assignments, want 1: %#v", len(got), actions)
-	}
-	return got[0]
-}
-
-func join(s *Scheduler, now time.Time, id string, threads int, speed float64) []Action {
-	return s.Handle(DeviceJoined{Now: now, DeviceID: id, Threads: threads, Speed: speed})
-}
-
-func ask(s *Scheduler, now time.Time, deviceID string, threadID int) []Action {
-	return s.Handle(TaskRequested{Now: now, DeviceID: deviceID, ThreadID: threadID})
-}
-
-func result(s *Scheduler, now time.Time, assigned AssignTask, jobID uint32) []Action {
-	return s.Handle(ResultReceived{Now: now, DeviceID: assigned.DeviceID, JobID: jobID, TaskID: assigned.Task.TaskID, Attempt: assigned.Attempt, ComputeMs: 10})
-}
-
-func TestPlainPullCompletesEachTileAndSignalsJobDoneOnce(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 4, 1, 1)
-	join(s, fakeStart, "worker", 1, 1)
-	first := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	if first.Task.TaskID != 0 || first.Attempt != 1 {
-		t.Fatalf("first assignment = task %d attempt %d", first.Task.TaskID, first.Attempt)
-	}
-	if actions := ask(s, fakeStart, "worker", 0); len(actions) != 0 {
-		t.Fatalf("busy thread request was not ignored: %#v", actions)
-	}
-	accepted := result(s, fakeStart, first, 4)
-	if len(accepted) != 1 {
-		t.Fatalf("first result actions = %#v, want TaskAccepted", accepted)
-	}
-	if action, ok := accepted[0].(TaskAccepted); !ok || action.JobID != 4 || action.TaskID != first.Task.TaskID || action.Attempt != first.Attempt || action.DeviceID != "worker" || action.ThreadID != 0 || action.ComputeMs != 10 {
-		t.Fatalf("accepted action = %#v", accepted[0])
-	}
-	second := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	if second.Task.TaskID != 1 {
-		t.Fatalf("plain pull task id = %d, want 1", second.Task.TaskID)
-	}
-	finished := result(s, fakeStart, second, 4)
-	if len(finished) != 3 {
-		t.Fatalf("last result actions = %#v, want TaskAccepted, DropRequests, JobDone", finished)
-	}
-	if _, ok := finished[0].(TaskAccepted); !ok {
-		t.Fatalf("first final action = %#v, want TaskAccepted", finished[0])
-	}
-	if _, ok := finished[1].(DropRequests); !ok {
-		t.Fatalf("second final action = %#v, want DropRequests", finished[1])
-	}
-	if _, ok := finished[2].(JobDone); !ok {
-		t.Fatalf("third final action = %#v, want JobDone", finished[2])
-	}
-	if actions := result(s, fakeStart, second, 4); !hasAction[DuplicateDropped](actions) || hasAction[JobDone](actions) {
-		t.Fatalf("late duplicate actions = %#v", actions)
-	}
-}
-
-func TestLeaseExpiryRequeuesAtFrontAndIncrementsAttempt(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 2, 1, 1)
-	join(s, fakeStart, "worker", 1, 1)
-	assigned := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	if !assigned.LeaseUntil.Equal(fakeStart.Add(3 * time.Second)) {
-		t.Fatalf("leaseUntil=%v, want 3 seconds", assigned.LeaseUntil)
-	}
-	expired := s.Handle(Tick{Now: assigned.LeaseUntil})
-	if !hasAction[Requeued](expired) {
-		t.Fatalf("expiry actions = %#v, want Requeued", expired)
-	}
-	retry := firstAssignment(t, ask(s, assigned.LeaseUntil, "worker", 0))
-	if retry.Task.TaskID != assigned.Task.TaskID || retry.Attempt != assigned.Attempt+1 {
-		t.Fatalf("retry = task %d attempt %d, want task %d attempt %d", retry.Task.TaskID, retry.Attempt, assigned.Task.TaskID, assigned.Attempt+1)
-	}
-}
-
-func TestLeaseHasTwoSecondFloor(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 13, 0.01)
-	join(s, fakeStart, "fast", 1, 100)
-	got := firstAssignment(t, ask(s, fakeStart, "fast", 0))
-	if !got.LeaseUntil.Equal(fakeStart.Add(2 * time.Second)) {
-		t.Fatalf("leaseUntil=%v, want two-second minimum", got.LeaseUntil)
-	}
-}
-
-func TestDisconnectRequeuesAndLateAttemptIsDropped(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 3, 1)
-	join(s, fakeStart, "gone", 1, 1)
-	old := firstAssignment(t, ask(s, fakeStart, "gone", 0))
-	if actions := s.Handle(DeviceLeft{Now: fakeStart, DeviceID: "gone"}); !hasAction[Requeued](actions) {
-		t.Fatalf("disconnect actions = %#v, want Requeued", actions)
-	}
-	join(s, fakeStart, "replacement", 1, 1)
-	current := firstAssignment(t, ask(s, fakeStart, "replacement", 0))
-	if current.Attempt != old.Attempt+1 {
-		t.Fatalf("new attempt=%d, want %d", current.Attempt, old.Attempt+1)
-	}
-	late := result(s, fakeStart, old, 3)
-	if !hasAction[DuplicateDropped](late) {
-		t.Fatalf("late dead-device result actions = %#v", late)
-	}
-	stale := result(s, fakeStart, current, 99)
-	if !hasAction[StaleDropped](stale) {
-		t.Fatalf("stale-job result actions = %#v", stale)
-	}
-}
-
-func TestDuplicateAndStaleResultsAreCounted(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 5, 1)
-	join(s, fakeStart, "worker", 1, 1)
-	assigned := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	if actions := result(s, fakeStart, assigned, 77); !hasAction[StaleDropped](actions) {
-		t.Fatalf("stale result actions = %#v", actions)
-	}
-	if actions := result(s, fakeStart, assigned, 5); !hasAction[TaskAccepted](actions) || !hasAction[JobDone](actions) {
-		t.Fatalf("valid final result actions = %#v", actions)
-	}
-	if actions := result(s, fakeStart, assigned, 5); !hasAction[DuplicateDropped](actions) {
-		t.Fatalf("duplicate result actions = %#v", actions)
-	}
-}
-
-func TestHeldRequestIsAnsweredWhenTileIsRequeued(t *testing.T) {
-	// A request can be held before a job exists. The private setup below also
-	// covers dispatching a pending request on a lease requeue; normal public
-	// flow usually end-game duplicates instead of holding while work is leased.
-	s := New(PlainPull)
-	join(s, fakeStart, "a", 1, 1)
-	join(s, fakeStart, "b", 1, 1)
-	ask(s, fakeStart, "b", 0)
-	started := startTiles(s, fakeStart, 6, 1)
-	preJobHeld := firstAssignment(t, started)
-	if preJobHeld.DeviceID != "b" {
-		t.Fatalf("pre-job held request went to %q", preJobHeld.DeviceID)
-	}
-	initial := firstAssignment(t, ask(s, fakeStart, "a", 0))
-	// Put b's request back into pending state to exercise the requeue drain path.
-	s.devices["b"].slots[0] = slot{pending: true}
-	s.held = []request{{deviceID: "b", threadID: 0}}
-	if actions := s.Handle(Tick{Now: initial.LeaseUntil}); len(assignments(actions)) != 1 {
-		t.Fatalf("requeue did not answer held request: %#v", actions)
-	} else if got := assignments(actions)[0]; got.DeviceID != "b" || got.Attempt != initial.Attempt+1 {
-		t.Fatalf("held assignment = %#v, want b with incremented attempt", got)
-	}
-}
-
-func TestRequestCapIgnoresExtraRequests(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 7, 1, 1, 1)
-	join(s, fakeStart, "worker", 2, 1)
-	firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	firstAssignment(t, ask(s, fakeStart, "worker", 1))
-	if actions := ask(s, fakeStart, "worker", 2); len(actions) != 0 {
-		t.Fatalf("extra request returned actions: %#v", actions)
-	}
-	if len(s.held) != 0 || len(s.devices["worker"].slots) != 2 {
-		t.Fatalf("extra request consumed another slot: held=%d slots=%d", len(s.held), len(s.devices["worker"].slots))
-	}
-}
-
-func TestCapabilityAwareSoftAffinity(t *testing.T) {
-	s := New(CapabilityAware)
-	startTiles(s, fakeStart, 8, 1, 2, 3, 4, 5)
-	join(s, fakeStart, "strong", 1, 10)
-	join(s, fakeStart, "weak", 4, 1)
-	strong := firstAssignment(t, ask(s, fakeStart, "strong", 0))
-	if strong.Task.TaskID != 4 {
-		t.Fatalf("strong got task %d, want heaviest task 4", strong.Task.TaskID)
-	}
-	wantWeak := []uint32{2, 1, 0, 3}
-	for thread, wantID := range wantWeak {
-		assigned := firstAssignment(t, ask(s, fakeStart, "weak", thread))
-		if assigned.Task.TaskID != wantID {
-			t.Fatalf("weak thread %d got task %d, want %d", thread, assigned.Task.TaskID, wantID)
+		s.Start(now)
+		a := s.Pull(id, now)
+		if a.Status != StatusTask || a.Attempt != 1 || a.TaskID != "task-0000" {
+			t.Fatalf("unexpected assignment: %+v", a)
 		}
-	}
-}
-
-func TestSingleDeviceIsStrong(t *testing.T) {
-	s := New(CapabilityAware)
-	startTiles(s, fakeStart, 9, 1, 2, 3)
-	join(s, fakeStart, "only", 1, 1)
-	got := firstAssignment(t, ask(s, fakeStart, "only", 0))
-	if got.Task.TaskID != 2 {
-		t.Fatalf("single device got task %d, want heaviest 2", got.Task.TaskID)
-	}
-}
-
-func TestEndGameDuplicatesOldestLeasedTileFirstResultWins(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 10, 1, 1)
-	join(s, fakeStart, "first", 2, 1)
-	join(s, fakeStart, "second", 1, 1)
-	first := firstAssignment(t, ask(s, fakeStart, "first", 0))
-	second := firstAssignment(t, ask(s, fakeStart, "first", 1))
-	duplicate := firstAssignment(t, ask(s, fakeStart, "second", 0))
-	if duplicate.Task.TaskID != first.Task.TaskID || duplicate.Attempt != first.Attempt+1 || second.Task.TaskID != 1 {
-		t.Fatalf("end-game assignments first=%#v second=%#v duplicate=%#v", first, second, duplicate)
-	}
-	if actions := result(s, fakeStart, duplicate, 10); hasAction[JobDone](actions) {
-		t.Fatalf("duplicate winner finished too soon: %#v", actions)
-	}
-	if actions := result(s, fakeStart, second, 10); !hasAction[JobDone](actions) {
-		t.Fatalf("last valid result did not finish job: %#v", actions)
-	}
-	if actions := result(s, fakeStart, first, 10); !hasAction[DuplicateDropped](actions) {
-		t.Fatalf("other attempt was not dropped: %#v", actions)
-	}
-}
-
-func TestAttemptDoesNotWrapPastUint16(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 12, 1)
-	join(s, fakeStart, "worker", 1, 1)
-	s.tiles[0].nextAttempt = 65534
-	last := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	if last.Attempt != 65535 {
-		t.Fatalf("last representable attempt=%d", last.Attempt)
-	}
-	if actions := s.Handle(Tick{Now: last.LeaseUntil}); !hasAction[Requeued](actions) {
-		t.Fatalf("expiry actions=%#v", actions)
-	}
-	if actions := ask(s, last.LeaseUntil, "worker", 0); len(assignments(actions)) != 0 || len(s.held) != 1 {
-		t.Fatalf("attempt wrapped or pending request lost: actions=%#v held=%d", actions, len(s.held))
-	}
-}
-
-func TestResetRequeuesLeasedAndDropsRequests(t *testing.T) {
-	s := New(PlainPull)
-	startTiles(s, fakeStart, 11, 1, 1)
-	join(s, fakeStart, "worker", 2, 1)
-	assigned := firstAssignment(t, ask(s, fakeStart, "worker", 0))
-	actions := s.Handle(Reset{Now: fakeStart.Add(time.Second)})
-	if !hasAction[DropRequests](actions) || !hasAction[Requeued](actions) {
-		t.Fatalf("reset actions = %#v", actions)
-	}
-	retry := firstAssignment(t, ask(s, fakeStart.Add(time.Second), "worker", 0))
-	if retry.Task.TaskID != assigned.Task.TaskID || retry.Attempt != 2 {
-		t.Fatalf("reset retry = %#v", retry)
-	}
-}
-
-func TestDeterministicThreeDeviceSimulationCompletes1024Tiles(t *testing.T) {
-	s := New(CapabilityAware)
-	tiles := make([]Tile, proto.CanvasSize/proto.TileSize*(proto.CanvasSize/proto.TileSize))
-	for i := range tiles {
-		task := proto.BenchTile()
-		task.TaskID = uint32(i)
-		tiles[i] = Tile{Task: task, EstimatedCost: float64(1 + i%17)}
-	}
-	s.Handle(StartJob{Now: fakeStart, JobID: 42, Tiles: tiles})
-	devices := []struct {
-		id      string
-		threads int
-		speed   float64
-	}{{"slow", 2, 1}, {"mid", 2, 4}, {"fast", 2, 9}}
-	for _, d := range devices {
-		join(s, fakeStart, d.id, d.threads, d.speed)
-	}
-	work := make([]AssignTask, 0, 16)
-	for _, d := range devices {
-		for thread := 0; thread < d.threads; thread++ {
-			work = append(work, assignments(ask(s, fakeStart, d.id, thread))...)
+		out := s.Result(id, a.TaskID, a.Attempt, []byte(`{"ok":true}`), 1.25, now.Add(time.Second))
+		if !out.Accepted || out.Reason != ReasonOK {
+			t.Fatalf("unexpected result outcome: %+v", out)
 		}
+		if got := s.Pull(id, now.Add(time.Second)); got.Status != StatusDone {
+			t.Fatalf("pull after completion = %q, want done", got.Status)
+		}
+		if r.seen[a.TaskID] != 1 {
+			t.Fatalf("reducer accepted task %d times", r.seen[a.TaskID])
+		}
+		snap := s.Snapshot(now.Add(2 * time.Second))
+		if snap.State != JobStateDone || snap.Done != 1 || snap.InFlight != 0 || snap.Workers[0].TasksDone != 1 {
+			t.Fatalf("unexpected snapshot: %+v", snap)
+		}
+	})
+
+	t.Run("worker dies and task is requeued exactly once", func(t *testing.T) {
+		now := startTime()
+		s := newTestScheduler(makeTasks(1), newReducer())
+		id, _ := s.Hello("alpha", WorkerInfo{}, now)
+		s.Start(now)
+		first := s.Pull(id, now)
+		s.Tick(now.Add(2 * time.Second))
+		if got := s.Snapshot(now.Add(2 * time.Second)); got.Requeued != 1 || got.InFlight != 0 {
+			t.Fatalf("unexpected post-expiry snapshot: %+v", got)
+		}
+		s.Tick(now.Add(4 * time.Second))
+		if got := s.Snapshot(now.Add(4 * time.Second)); got.Requeued != 1 {
+			t.Fatalf("requeued more than once: %+v", got)
+		}
+		if got := s.Pull(id, now.Add(4*time.Second)); got.Status != StatusWait {
+			t.Fatalf("lost worker pull status = %q, want wait", got.Status)
+		}
+		s.Hello("bravo", WorkerInfo{}, now.Add(4*time.Second))
+		sid, _ := s.Hello("bravo", WorkerInfo{}, now.Add(4*time.Second))
+		second := s.Pull(sid, now.Add(4*time.Second))
+		if second.Status != StatusTask || second.TaskID != first.TaskID || second.Attempt != first.Attempt+1 {
+			t.Fatalf("unexpected reissued task: first=%+v second=%+v", first, second)
+		}
+	})
+
+	t.Run("completed task duplicate is ignored", func(t *testing.T) {
+		now := startTime()
+		r := newReducer()
+		s := newTestScheduler(makeTasks(1), r)
+		id, _ := s.Hello("alpha", WorkerInfo{}, now)
+		s.Start(now)
+		a := s.Pull(id, now)
+		if out := s.Result(id, a.TaskID, a.Attempt, []byte(`1`), 1, now); !out.Accepted {
+			t.Fatalf("first result rejected: %+v", out)
+		}
+		out := s.Result(id, a.TaskID, a.Attempt, []byte(`2`), 1, now)
+		if out.Accepted || out.Reason != ReasonDuplicate {
+			t.Fatalf("duplicate outcome = %+v", out)
+		}
+		if r.seen[a.TaskID] != 1 {
+			t.Fatalf("reducer accepted duplicate: count=%d", r.seen[a.TaskID])
+		}
+	})
+
+	t.Run("late result for requeued task wins once", func(t *testing.T) {
+		now := startTime()
+		r := newReducer()
+		s := newTestScheduler(makeTasks(1), r)
+		oldID, _ := s.Hello("old", WorkerInfo{}, now)
+		newID, _ := s.Hello("new", WorkerInfo{}, now)
+		s.Start(now)
+		old := s.Pull(oldID, now)
+		s.Tick(now.Add(2 * time.Second))
+		new := s.Pull(newID, now.Add(2*time.Second))
+		if new.Attempt != old.Attempt+1 {
+			t.Fatalf("attempts old=%d new=%d", old.Attempt, new.Attempt)
+		}
+		out := s.Result(oldID, old.TaskID, old.Attempt, []byte(`"late"`), 1.5, now.Add(2100*time.Millisecond))
+		if !out.Accepted {
+			t.Fatalf("late result rejected: %+v", out)
+		}
+		if duplicate := s.Result(newID, new.TaskID, new.Attempt, []byte(`"other"`), 1, now.Add(2200*time.Millisecond)); duplicate.Accepted || duplicate.Reason != ReasonDuplicate {
+			t.Fatalf("subsequent result outcome = %+v", duplicate)
+		}
+		if r.seen[old.TaskID] != 1 || r.workers[old.TaskID] != oldID {
+			t.Fatalf("late result was not the sole accepted result: seen=%v workers=%v", r.seen, r.workers)
+		}
+		if snap := s.Snapshot(now.Add(3 * time.Second)); snap.Requeued != 1 || snap.InFlight != 0 || snap.Done != 1 {
+			t.Fatalf("unexpected snapshot: %+v", snap)
+		}
+	})
+
+	t.Run("late join mid-job", func(t *testing.T) {
+		now := startTime()
+		s := newTestScheduler(makeTasks(2), newReducer())
+		s.Start(now)
+		id, rejoined := s.Hello("late", WorkerInfo{}, now.Add(time.Second))
+		if rejoined {
+			t.Fatal("new mid-job worker reported rejoined")
+		}
+		if got := s.Pull(id, now.Add(time.Second)); got.Status != StatusTask {
+			t.Fatalf("late worker pull status = %q", got.Status)
+		}
+	})
+
+	t.Run("rejoin after lost", func(t *testing.T) {
+		now := startTime()
+		s := newTestScheduler(makeTasks(1), newReducer())
+		id, _ := s.Hello("alpha", WorkerInfo{}, now)
+		s.Start(now)
+		s.Pull(id, now)
+		s.Tick(now.Add(2 * time.Second))
+		gotID, rejoined := s.Hello("alpha", WorkerInfo{CPU: "new cpu"}, now.Add(3*time.Second))
+		if gotID != id || !rejoined {
+			t.Fatalf("hello after loss got (%q,%v), want (%q,true)", gotID, rejoined, id)
+		}
+		if ok, unknown := s.Heartbeat(id, nil, now.Add(3*time.Second)); !ok || unknown {
+			t.Fatalf("rejoined heartbeat = (%v,%v)", ok, unknown)
+		}
+		if got := s.Snapshot(now.Add(3 * time.Second)).Workers[0].Status; got != WorkerStatusRejoined {
+			t.Fatalf("worker status = %q, want rejoined", got)
+		}
+	})
+
+	t.Run("pull before start waits", func(t *testing.T) {
+		now := startTime()
+		s := newTestScheduler(makeTasks(1), newReducer())
+		id, _ := s.Hello("alpha", WorkerInfo{}, now)
+		if got := s.Pull(id, now); got.Status != StatusWait {
+			t.Fatalf("pull status = %q, want wait", got.Status)
+		}
+	})
+}
+
+func TestRandomizedThousandTaskSimulation(t *testing.T) {
+	now := startTime()
+	rng := rand.New(rand.NewSource(0x5eed))
+	tasks := makeTasks(1000)
+	reducer := newReducer()
+	s := newTestScheduler(tasks, reducer)
+	const workers = 8
+	workerIDs := make([]string, workers)
+	alive := make([]bool, workers)
+	for i := range workers {
+		workerIDs[i], _ = s.Hello(fmt.Sprintf("worker-%d", i), WorkerInfo{}, now)
+		alive[i] = true
 	}
-	completed := make(map[uint32]AssignTask, len(tiles))
-	jobDoneCount := 0
-	for len(work) > 0 && jobDoneCount == 0 {
-		current := work[0]
-		work = work[1:]
-		actions := result(s, fakeStart, current, 42)
-		if hasAction[DuplicateDropped](actions) {
-			work = append(work, assignments(ask(s, fakeStart, current.DeviceID, current.ThreadID))...)
-			continue
-		}
-		if _, exists := completed[current.Task.TaskID]; !exists {
-			completed[current.Task.TaskID] = current
-		}
-		for _, action := range actions {
-			if _, ok := action.(JobDone); ok {
-				jobDoneCount++
+	s.Start(now)
+
+	for step := 0; step < 10000; step++ {
+		now = now.Add(time.Second)
+		for i := range workers {
+			if !alive[i] {
+				workerIDs[i], _ = s.Hello(fmt.Sprintf("worker-%d", i), WorkerInfo{}, now)
+				alive[i] = true
+			}
+			if rng.Float64() < 0.035 {
+				alive[i] = false
+				continue
+			}
+			assignment := s.Pull(workerIDs[i], now)
+			if assignment.Status == StatusTask {
+				s.Result(workerIDs[i], assignment.TaskID, assignment.Attempt, []byte(`true`), 0.5, now)
+			} else {
+				s.Heartbeat(workerIDs[i], nil, now)
 			}
 		}
-		work = append(work, assignments(ask(s, fakeStart, current.DeviceID, current.ThreadID))...)
-	}
-	if len(completed) != len(tiles) || jobDoneCount != 1 {
-		t.Fatalf("simulation completed %d/%d tiles; JobDone count=%d, queued work=%d", len(completed), len(tiles), jobDoneCount, len(work))
-	}
-	for _, prior := range completed {
-		actions := result(s, fakeStart, prior, 42)
-		if !hasAction[DuplicateDropped](actions) {
-			t.Fatalf("completed tile %d did not drop duplicate", prior.Task.TaskID)
-		}
-		for _, action := range actions {
-			if _, ok := action.(JobDone); ok {
-				t.Fatal("JobDone fired more than once")
-			}
+		s.Tick(now)
+		if s.Snapshot(now).Done == len(tasks) {
+			break
 		}
 	}
-	if len(completed) != 1024 {
-		t.Fatal(fmt.Sprintf("completion count=%d", len(completed)))
+
+	if got := s.Snapshot(now).Done; got != len(tasks) {
+		t.Fatalf("simulation ended with %d/%d tasks done", got, len(tasks))
+	}
+	if len(reducer.seen) != len(tasks) {
+		t.Fatalf("reducer saw %d unique tasks, want %d", len(reducer.seen), len(tasks))
+	}
+	for _, task := range tasks {
+		if reducer.seen[task.ID] != 1 {
+			t.Fatalf("task %s accepted %d times", task.ID, reducer.seen[task.ID])
+		}
+	}
+}
+
+func TestHeartbeatExtendsAllWorkerLeases(t *testing.T) {
+	now := startTime()
+	s := newTestScheduler(makeTasks(2), newReducer())
+	id, _ := s.Hello("alpha", WorkerInfo{}, now)
+	s.Start(now)
+	s.Pull(id, now)
+	s.Pull(id, now)
+	if ok, unknown := s.Heartbeat(id, []string{"task-0000"}, now.Add(time.Second)); !ok || unknown {
+		t.Fatalf("heartbeat = (%v,%v)", ok, unknown)
+	}
+	s.Tick(now.Add(2500 * time.Millisecond))
+	if got := s.Snapshot(now.Add(2500 * time.Millisecond)); got.InFlight != 2 || got.Requeued != 0 {
+		t.Fatalf("heartbeat failed to extend every held lease: %+v", got)
 	}
 }
