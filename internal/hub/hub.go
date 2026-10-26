@@ -40,8 +40,10 @@ type Config struct {
 
 // Snapshot is a point-in-time overview of the active job.
 type Snapshot struct {
-	JobID                uint32
-	Done, Total, Devices int
+	JobID   uint32
+	Done    int
+	Total   int
+	Devices int
 }
 
 type outbound struct {
@@ -182,6 +184,25 @@ func (h *Hub) Snapshot() Snapshot {
 		return snap
 	}
 	return Snapshot{}
+}
+
+// Tile returns a copy of an accepted tile and the job it belongs to.
+func (h *Hub) Tile(taskID uint32) ([]byte, uint32, bool) {
+	v := h.call(func(s *state) any {
+		pixels, ok := s.store.Get(taskID)
+		return tileSnapshot{pixels: pixels, jobID: s.jobID, ok: ok}
+	})
+	result, ok := v.(tileSnapshot)
+	if !ok {
+		return nil, 0, false
+	}
+	return result.pixels, result.jobID, result.ok
+}
+
+type tileSnapshot struct {
+	pixels []byte
+	jobID  uint32
+	ok     bool
 }
 
 // Handler returns the /ws/worker-compatible WebSocket handler.

@@ -239,3 +239,45 @@
   - None identified for these test vectors.
 - What the next task depends on:
   - Worker-side protocol tests should use the same documented TASK bytes and RESULT header/payload vector.
+
+## Server wiring and mock worker (2026-10-26 12:42 Asia/Calcutta)
+- What was built:
+  - Replaced the placeholder server entry point with configurable coordinator startup, signal handling, graceful HTTP shutdown, LAN URL reporting, worker WebSocket mounting, and static serving.
+  - Added POST `/api/run-again`, GET `/api/job`, and GET `/api/tile/{taskId}` with copied, thread-safe tile reads and no-cache headers for HTML/JavaScript.
+  - Added a configurable multi-device `cmd/mockworker` utility using `internal/proto` for protocol encoding/decoding, synthetic RGBA gradients, jitter, heartbeats, job restarts, and first-device disconnect.
+  - Added an httptest integration that connects three mock workers, verifies initial tile 404 and accepted tile bytes, observes job completion, and starts a replacement job mid-run.
+- Files created/changed:
+  - `cmd/server/main.go` — flags, coordinator lifecycle, interface URLs, and TODO markers for teammate-owned dashboard/QR registration.
+  - `cmd/server/api.go` — API routes and static file handler.
+  - `cmd/server/logcollector.go` — join/leave/job/requeue logging and optional per-task logs.
+  - `cmd/server/api_test.go` — three-worker server/API integration test.
+  - `cmd/mockworker/main.go` — mock device CLI flags and lifecycle.
+  - `cmd/mockworker/worker.go` — protocol-compliant mock worker and synthetic tile output.
+  - `internal/hub/hub.go` — copied accepted-tile accessor for API reads.
+  - `internal/hub/store.go` — synchronized TileStore reads/writes for API access.
+  - `README.md` — coordinator and mock-worker Windows commands.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - Server flags: `-addr`, `-web`, `-autostart`, `-x0`, `-y0`, `-scale`, `-maxiter`, `-bench-hash`, `-heartbeat-timeout`, `-mode`, and `-verbose`.
+  - `POST /api/run-again` returns `{"jobId": n}`; `GET /api/job` returns `jobId`, `done`, `total`, and `devices`; `GET /api/tile/{taskId}` returns raw RGBA bytes with `Content-Type: application/octet-stream` and `X-Job-Id`.
+  - `(*hub.Hub).Tile(taskID uint32) ([]byte, uint32, bool)` returns copied pixels and the current job ID.
+  - Mockworker flags: `-url`, `-devices`, `-threads`, `-tiles-per-sec`, `-jitter`, `-kill-after`, and `-name`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test ./...` — passed (exit 0): `cmd/server`, `internal/hub`, `internal/proto`, and `internal/sched` passed; `cmd/mockworker` has no tests.
+  - `go test ./... -race` — failed before tests ran because MinGW reported `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in` while building `runtime/cgo`.
+  - Manual run for about 10 seconds: `go run ./cmd/server -addr 127.0.0.1:8181 -web web -mode aware -verbose` and `go run ./cmd/mockworker -url ws://127.0.0.1:8181/ws/worker -devices 3 -threads 2 -tiles-per-sec 20 -jitter 0.15 -name e2e`.
+  - Observed log lines: `device joined id=e2e-1 threads=2 mock=true perThread=20.000 hash-throughput=40.000`; `task accepted device=e2e-2 task=3 attempt=1 computeMs=43.666`; `job done id=1 imageHash=d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671 wall=29.907s`; each mock device logged `observed JOB_DONE id=e2e-N job=1`.
+- Decisions & deviations from this spec, and why:
+  - Dashboard and QR registration remain explicit TODO comments; no calls were added because teammate-owned files do not exist yet.
+  - The mock worker computes a stable synthetic gradient, including a SHA-256 hash for its mock benchmark output; mock devices bypass the expected real-kernel hash check.
+  - The API encodes Snapshot fields as lower-camel-case JSON in its handler without changing the hub Snapshot field names.
+- Known issues / TODOs / things you were unsure about:
+  - The manual run used mock computation, so it validates end-to-end protocol and scheduling flow rather than real Mandelbrot kernel speed.
+  - Race-instrumented tests remain unverified because the installed MinGW C compiler lacks 64-bit mode.
+  - `/worker` and `/dash` currently rely on files in the configured static web directory; teammate-owned dashboard/QR endpoints remain unregistered.
+- What the next task depends on:
+  - Teammates can replace mock benchmark/tile work with the browser WASM worker while preserving `docs/protocol.md`.
+  - The dashboard and QR owners can add their route registrations in the server entry point when their files are ready.
