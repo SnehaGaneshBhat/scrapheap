@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +47,29 @@ type apiSnapshot struct {
 	TileSize   int      `json:"tileSize"`
 	Cols       int      `json:"cols"`
 	PublicHost string   `json:"publicHost"`
+}
+
+func TestWorkerAliasServesDemo(t *testing.T) {
+	webDir := t.TempDir()
+	const body = "browser worker demo"
+	if err := os.WriteFile(filepath.Join(webDir, "demo.html"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := newHTTPHandler(hub.New(hub.Config{}, nil, nil), webDir)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/worker", nil))
+	if response.Code != http.StatusOK || response.Body.String() != body {
+		t.Fatalf("GET /worker status=%d body=%q", response.Code, response.Body.String())
+	}
+	const teamBody = "team worker page"
+	if err := os.WriteFile(filepath.Join(webDir, "worker.html"), []byte(teamBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/worker", nil))
+	if response.Code != http.StatusOK || response.Body.String() != teamBody {
+		t.Fatalf("GET /worker with worker.html status=%d body=%q", response.Code, response.Body.String())
+	}
 }
 
 func TestServerAPIRunAndTiles(t *testing.T) {

@@ -25,19 +25,24 @@ JavaScript module loads the `.wasm` file, which contains the compiled C kernel.
 The worker must allocate an output buffer, call `_process_tile`, copy `w*h*4`
 bytes from WASM memory, then encode the protocol RESULT frame.
 
-To view a full-resolution browser render after compiling, serve the repository root
-(opening the HTML directly can block the ES module and WASM fetch):
+To connect the browser worker to the Go coordinator, start the server with the
+`wasm` directory as its static root:
 
 ```powershell
-python -m http.server 8000
+go run ./cmd/server -web wasm
 ```
 
-Then open `http://localhost:8000/wasm/demo.html`. The page calls the compiled
-renderer for all 1,024 64x64 tiles, assembles their pixels into a 2048x2048
-image, and prints its runtime and image hash. The coordinator's current entry
-point is still a placeholder; this is a local kernel check, not a distributed
-worker demo. Once rendering completes, the Download PNG button saves the full
-2048x2048 canvas as a PNG file.
+Open `http://localhost:8080/worker` on the coordinator or on a device that can
+reach it over the LAN. The page opens `/ws/worker`, benchmarks the WASM kernel,
+requests one tile at a time, and returns binary RESULT frames. The server sends
+ACK after accepting a result. The page draws tiles accepted from that browser;
+it does not yet assemble other devices' tiles. The Download PNG button saves
+this browser's 2048x2048 canvas as a PNG.
+
+The demo currently uses one Web Worker thread per browser page. Browsers on the
+same LAN should use the coordinator's printed Worker URL so the page and
+WebSocket use the same host. For HTTPS hosting, the client selects `wss`; for
+the local HTTP demo it uses `ws`.
 
 The system does not have Emscripten installed globally. For this task, an
 Emscripten 3.1.6 toolchain was unpacked under `/tmp`; its build completed and

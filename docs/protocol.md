@@ -8,6 +8,7 @@ zero-based from the start of a WebSocket message.
 ## Connections and framing
 
 - Workers connect to `/ws/worker`.
+- `/worker` serves `worker.html` from the selected static root when present, otherwise `demo.html`; use `-web wasm` to serve the C/WASM demo.
 - The dashboard connects to `/ws/dash`.
 - WebSocket text frames contain UTF-8 JSON messages.
 - WebSocket binary frames contain TASK or RESULT frames.
@@ -33,8 +34,8 @@ Every message has a case-sensitive `type` string. Fields below are case-sensitiv
 | `BENCH_RESULT` | worker to server | `tilesPerSec`: finite number > 0; `perThread`: finite number > 0; `threads`: int 1..16; `hash`: 64 hexadecimal SHA-256 characters | `{"type":"BENCH_RESULT","tilesPerSec":12.5,"perThread":6.25,"threads":2,"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` |
 | `REQUEST_TASK` | worker to server | none | `{"type":"REQUEST_TASK"}` |
 | `HEARTBEAT` | worker to server | none | `{"type":"HEARTBEAT"}` |
-| `ACK` | worker to server | `jobId`: uint32; `taskId`: uint32; `attempt`: uint16 > 0 | `{"type":"ACK","jobId":42,"taskId":7,"attempt":1}` |
-| `JOB_DONE` | worker to server | `jobId`: uint32 | `{"type":"JOB_DONE","jobId":42}` |
+| `ACK` | server to worker | `jobId`: uint32; `taskId`: uint32; `attempt`: uint16 > 0 | `{"type":"ACK","jobId":42,"taskId":7,"attempt":1}` |
+| `JOB_DONE` | server to worker | `jobId`: uint32 | `{"type":"JOB_DONE","jobId":42}` |
 | `WELCOME` | server to worker | `heartbeatIntervalMs`: uint32 > 0; `heartbeatTimeoutMs`: uint32 > 0 | `{"type":"WELCOME","heartbeatIntervalMs":1000,"heartbeatTimeoutMs":5000}` |
 | `JOB_STARTED` | server to all connected workers | `jobId`: uint32 | `{"type":"JOB_STARTED","jobId":42}` |
 
@@ -43,6 +44,11 @@ mock devices and excluded from benchmark exports. A valid HELLO includes
 `threads` from 1 through 16. BENCH_RESULT carries the measured throughput for
 all threads and the per-thread throughput, plus the hash of the benchmark tile's
 RGBA bytes.
+
+The shipped C/WASM kernel's benchmark RGBA SHA-256 is
+`d6fa975fbe938c066f3baedf5b850e2418b6ec83e3ae563d0daa2d3170b156fc`. The
+browser worker uses this fixed value when Web Crypto is unavailable on a plain
+HTTP LAN origin; rebuilds that change the kernel output must update this value.
 
 The server sends WELCOME after accepting HELLO. WELCOME contains heartbeat timing;
 it does not contain job state. If a job is already running, the server follows

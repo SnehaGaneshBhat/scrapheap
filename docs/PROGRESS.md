@@ -413,3 +413,40 @@
   - The generated PNG preview is in `/tmp/mandelbrot-full.png`; it is a temporary verification artifact, while the browser page can download a PNG locally.
 - What the next task depends on:
   - The worker page should reuse the same 64x64 tile parameters and copy returned pixels into its displayed 2048x2048 canvas while actual coordinator assignments arrive over WebSocket.
+
+## Connect WASM browser worker to Go coordinator (2026-10-26 14:51 Asia/Calcutta)
+- What was built:
+  - Added a module Web Worker that loads the C/WASM kernel, sends HELLO and BENCH_RESULT, maintains heartbeats, requests tasks, computes TASK frames, and returns binary RESULT frames.
+  - The page now opens `/ws/worker`, displays tiles after the server accepts them, and exports the current canvas as PNG.
+  - Added `/worker` as an alias for `demo.html` when serving `-web wasm`; corrected ACK and JOB_DONE directions in the protocol documentation.
+- Files created/changed:
+  - `wasm/client-worker.js` — WebSocket protocol client and WASM tile execution.
+  - `wasm/demo.js` — starts the browser worker and draws accepted tile results.
+  - `wasm/demo.html` — describes and hosts the connected browser worker.
+  - `cmd/server/api.go` — serves the demo at `/worker` under the configured static root.
+  - `cmd/server/api_test.go` — verifies that `/worker` serves the demo page.
+  - `docs/protocol.md` — corrects server-to-worker ACK/JOB_DONE directions and records the shipped benchmark hash.
+  - `wasm/README.md` — documents running the connected demo with the Go coordinator.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - Start the coordinator with `go run ./cmd/server -web wasm`; open `http://localhost:8080/worker`.
+  - The browser sends HELLO, BENCH_RESULT, HEARTBEAT, and REQUEST_TASK JSON; it receives WELCOME, JOB_STARTED, ACK, and JOB_DONE JSON plus binary TASK frames, and sends binary RESULT frames.
+  - One Web Worker thread is used per browser tab. Tiles are drawn locally after server ACK; the page does not yet assemble tiles returned by other browsers.
+- How to run/test:
+  - `gofmt -w cmd/server/api.go cmd/server/api_test.go` — passed.
+  - `node --check wasm/client-worker.js` and `node --check wasm/demo.js` — passed.
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed: server, hub, proto, and sched packages passed; cmd/mockworker has no tests.
+  - `git diff --check` — passed (exit 0).
+  - Manual browser/server run: `go run ./cmd/server -web wasm -addr 127.0.0.1:8181 -host 127.0.0.1 -verbose`, then Firefox at `/worker` — passed; the browser registered with the benchmark hash, received and returned all 1,024 tiles, and the Go server logged job completion in 13.337s.
+- Decisions & deviations from this spec, and why:
+  - Kept one WebSocket and one compute thread per browser tab for the first end-to-end connection; worker thread pooling can be added after this path is stable.
+  - Used the same-origin WebSocket URL and selected `ws` or `wss` from the page protocol so LAN clients connect to the host serving the page.
+  - Added a fixed benchmark hash fallback for plain HTTP LAN contexts where Web Crypto is unavailable; secure contexts compute and compare the hash at runtime.
+- Known issues / TODOs / things you were unsure about:
+  - Each browser displays only tiles it computed. A dashboard still needs to fetch accepted tiles from `/api/tile/{taskId}` to assemble the cluster-wide image.
+  - Firefox reported 0–1 ms compute times for many 64x64 tiles because browser timing precision is coarse at this tile size; throughput registration succeeded.
+  - The HTTP LAN benchmark-hash fallback assumes the shipped WASM module and color rule are unchanged; update its constant when rebuilding the kernel with different output.
+- What the next task depends on:
+  - The dashboard can assemble the global canvas from `/api/job` and `/api/tile/{taskId}` or add a dashboard WebSocket feed.
+  - Additional Web Worker threads can share the same device connection after defining task dispatch across client-side worker slots.

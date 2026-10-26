@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +14,18 @@ import (
 func newHTTPHandler(h *hub.Hub, webDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/ws/worker", h.Handler())
+	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		page := "demo.html"
+		if _, err := os.Stat(filepath.Join(webDir, "worker.html")); err == nil {
+			page = "worker.html"
+		}
+		http.ServeFile(w, r, filepath.Join(webDir, page))
+	})
 	mux.HandleFunc("/api/run-again", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
