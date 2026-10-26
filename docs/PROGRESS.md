@@ -137,3 +137,38 @@
   - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
 - What the next task depends on:
   - Worker/server integration should use the documented canonical offsets and preserve the per-pixel coordinate formula exactly.
+
+## Sched: pure scheduler state machine (2026-10-26 11:24 Asia/Calcutta)
+
+- What was built:
+  - Added an event-driven scheduler with injected event timestamps, typed events/actions, and no networking, goroutines, or wall-clock reads.
+  - Implemented plain pull and capability-aware heavy/light queues, worker thread request limits, leases, expiry/disconnect/reset requeues, and end-game duplicate attempts.
+  - Added first-valid-result handling, stale and duplicate drop metrics, held request dispatch, and one-shot JobDone signaling.
+  - Added fake-time tests including a deterministic 1,024-tile, three-device completion simulation.
+- Files created/changed:
+  - `internal/sched/scheduler.go` — pure scheduler state machine, events, actions, queues, and lease policy.
+  - `internal/sched/scheduler_test.go` — fake-time lifecycle, affinity, limits, retries, end-game, and full-job tests.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `New(mode Mode) *Scheduler` and `(*Scheduler).Handle(ev Event) []Action`.
+  - Modes: `PlainPull` and `CapabilityAware`.
+  - Events: `StartJob`, `DeviceJoined`, `DeviceLeft`, `TaskRequested`, `ResultReceived`, `Tick`, and `Reset`.
+  - Actions: `AssignTask`, `JobDone`, `DropRequests`, `Requeued`, `DuplicateDropped`, and `StaleDropped`.
+  - `Tile` combines `proto.Task` render parameters with `EstimatedCost`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); protocol and scheduler packages passed, server package has no tests.
+  - `rg -n "time\\.Now|go func|go " internal/sched` — no matches.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - Device thread IDs are zero-based and must be less than the joined device's `threads` count.
+  - Even-sized medians use the arithmetic mean of the two central values; ties are stable by input/task order where relevant.
+  - Attempt IDs stop at uint16 max rather than wrapping to zero.
+  - No Scheduler semantics section was added to `docs/protocol.md`; its existing request-cap, no-prefetch, reset, and job lifecycle semantics do not contradict this implementation.
+- Known issues / TODOs / things you were unsure about:
+  - The caller must validate incoming device/job data and perform the actual network sends and metric export.
+  - Speed is supplied by the caller in estimated-cost units per second; the server should compute it as `benchTilesPerSec * benchTileCost`.
+- What the next task depends on:
+  - Server integration should own one Scheduler from one goroutine, add `Now` to each event, forward returned actions, and translate accepted result/job completion state into dashboard and metric events.
