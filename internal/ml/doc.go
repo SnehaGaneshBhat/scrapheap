@@ -4,6 +4,7 @@
 // single-threaded float64 arithmetic, and package-provided exp and log
 // approximations. Calculations avoid architecture-dependent math intrinsics
 // and map iteration. Dataset contents are verified by SHA-256 before use.
-// Ordinary training reports validation metrics only; test data is reserved for
-// final evaluation.
+// ValidationHash hashes exact validation metric bits and excludes wall-clock
+// duration. Ordinary training reports validation metrics only; test data is
+// reserved for final evaluation.
 package ml

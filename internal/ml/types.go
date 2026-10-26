@@ -1,6 +1,11 @@
 package ml
 
-import "errors"
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"math"
+)
 
 // Config is an MNIST training configuration. JSON names follow the pending
 // MNIST payload proposal in docs/protocol.md. A zero TrainRows uses all
@@ -20,6 +25,16 @@ type Result struct {
 	ValAcc   float64 `json:"valAcc"`
 	ValLoss  float64 `json:"valLoss"`
 	TrainSec float64 `json:"trainSec"`
+}
+
+// ValidationHash returns a SHA-256 digest of the exact float64 bit patterns for
+// validation accuracy and loss, in that order and big-endian byte order.
+// TrainSec is intentionally excluded because wall-clock measurements vary.
+func ValidationHash(result Result) [32]byte {
+	var values [16]byte
+	binary.BigEndian.PutUint64(values[:8], math.Float64bits(result.ValAcc))
+	binary.BigEndian.PutUint64(values[8:], math.Float64bits(result.ValLoss))
+	return sha256.Sum256(values[:])
 }
 
 // TestResult contains the final test-set metric. It is reserved for final
