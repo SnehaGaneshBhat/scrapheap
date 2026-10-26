@@ -27,6 +27,26 @@ func TestConfigJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigTrainRowsJSONRoundTrip(t *testing.T) {
+	want := Config{Hidden: 64, LR: 0.05, Epochs: 3, Batch: 32, Seed: 7, TrainRows: 12000}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal Config with trainRows: %v", err)
+	}
+	const expected = `{"hidden":64,"lr":0.05,"epochs":3,"batch":32,"seed":7,"trainRows":12000}`
+	if string(data) != expected {
+		t.Fatalf("Config JSON = %s, want %s", data, expected)
+	}
+
+	var got Config
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal Config with trainRows: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Config round trip = %#v, want %#v", got, want)
+	}
+}
+
 func TestResultJSONRoundTrip(t *testing.T) {
 	want := Result{ValAcc: 0.97, ValLoss: 0.12, TrainSec: 8.43}
 	data, err := json.Marshal(want)
