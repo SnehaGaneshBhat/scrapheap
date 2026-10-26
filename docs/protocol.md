@@ -1,215 +1,314 @@
-# Worker and dashboard protocol
+# Scrap Heap worker protocol and API
 
-This document is the shared source of truth for the Go backend and worker client.
-All multi-byte integers, float32 values, and float64 values in binary frames are
-little-endian. There is no implicit padding or alignment. Binary offsets are
-zero-based from the start of a WebSocket message.
+Version 1 uses plain HTTP and JSON on one coordinator port, defaulting to `:8080`. Worker endpoints use `Content-Type: application/json` and return JSON. There is no authentication in v1; use only on a trusted LAN. JSON examples below are UTF-8.
 
-## Connections and framing
+## Worker endpoints
 
-- Workers connect to `/ws/worker`.
-- `/worker` serves `worker.html` from the selected static root when present, otherwise `demo.html`; use `-web wasm` to serve the C/WASM demo.
-- The dashboard connects to `/ws/dash`.
-- WebSocket text frames contain UTF-8 JSON messages.
-- WebSocket binary frames contain TASK or RESULT frames.
-- `GET /api/job` returns a JSON snapshot with `jobId`, `done`, `total`,
-  `devices`, `mode`, `view` (`x0`, `y0`, `scale`, `maxIter`), `canvas`,
-  `tileSize`, `cols`, and `publicHost`. `mode` is `pull` or `aware`.
-- `publicHost` is the configured public hostname/IP (`-host`) or the empty string
-  when no public host was configured. The scheduler CLI mode `plain` aliases
-  `pull`; both serialize in the snapshot as `pull`.
-- `GET /api/tile/{taskId}` returns accepted tile bytes as raw RGBA with
-  `Content-Type: application/octet-stream` and `X-Job-Id`.
+All worker calls are `POST` requests with a JSON object body and a JSON object reply. Fields shown in request and response schemas are required unless marked opaque or optional. The coordinator may return whitespace-different JSON; field names and meanings are the contract.
 
-Unknown extra JSON fields are ignored. Unknown JSON `type` values are rejected
-with `UnknownMessageTypeError`.
+### `POST /w/hello`
 
-## JSON messages
+Registers a worker or reconnects a worker identified by its name.
 
-Every message has a case-sensitive `type` string. Fields below are case-sensitive.
+Request fields: `name`, `cpu`, `cores`, `threads`, `os`, and `version` are strings except `cores` and `threads`, which are integers.
 
-| Type | Direction | Fields | Example |
-| --- | --- | --- | --- |
-| `HELLO` | worker to server | `deviceId`: non-empty string; `userAgent`: string; `cores`: uint32 > 0; `threads`: int 1..16 (Web Worker count); `mock`: bool, defaults to false | `{"type":"HELLO","deviceId":"phone-1","userAgent":"Example Browser","cores":4,"threads":2,"mock":false}` |
-| `BENCH_RESULT` | worker to server | `tilesPerSec`: finite number > 0; `perThread`: finite number > 0; `threads`: int 1..16; `hash`: 64 hexadecimal SHA-256 characters | `{"type":"BENCH_RESULT","tilesPerSec":12.5,"perThread":6.25,"threads":2,"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` |
-| `REQUEST_TASK` | worker to server | none | `{"type":"REQUEST_TASK"}` |
-| `HEARTBEAT` | worker to server | none | `{"type":"HEARTBEAT"}` |
-| `ACK` | server to worker | `jobId`: uint32; `taskId`: uint32; `attempt`: uint16 > 0 | `{"type":"ACK","jobId":42,"taskId":7,"attempt":1}` |
-| `JOB_DONE` | server to worker | `jobId`: uint32 | `{"type":"JOB_DONE","jobId":42}` |
-| `WELCOME` | server to worker | `heartbeatIntervalMs`: uint32 > 0; `heartbeatTimeoutMs`: uint32 > 0 | `{"type":"WELCOME","heartbeatIntervalMs":1000,"heartbeatTimeoutMs":5000}` |
-| `JOB_STARTED` | server to all connected workers | `jobId`: uint32 | `{"type":"JOB_STARTED","jobId":42}` |
-
-HELLO's omitted `mock` value is false. Devices with `mock: true` are tagged as
-mock devices and excluded from benchmark exports. A valid HELLO includes
-`threads` from 1 through 16. BENCH_RESULT carries the measured throughput for
-all threads and the per-thread throughput, plus the hash of the benchmark tile's
-RGBA bytes.
-
-The shipped C/WASM kernel's benchmark RGBA SHA-256 is
-`d6fa975fbe938c066f3baedf5b850e2418b6ec83e3ae563d0daa2d3170b156fc`. The
-browser worker uses this fixed value when Web Crypto is unavailable on a plain
-HTTP LAN origin; rebuilds that change the kernel output must update this value.
-
-The server sends WELCOME after accepting HELLO. WELCOME contains heartbeat timing;
-it does not contain job state. If a job is already running, the server follows
-WELCOME with JOB_STARTED for the current `jobId`. Whenever a job starts or resets,
-it increments `jobId` and broadcasts JOB_STARTED to connected workers. Results
-whose `jobId` is not the current job are dropped.
-
-On JOB_DONE or reset, the server drops all held REQUEST_TASKs. Workers send a new
-REQUEST_TASK after receiving JOB_STARTED, or after WELCOME if a job is already
-running. A device may have at most `threads` outstanding requests plus leased
-tasks combined; extra REQUEST_TASKs are ignored. No prefetch is done by default.
-A 1-second timer after JOB_DONE is an acceptable client fallback for requesting
-again.
-
-## Shared render contract
-
-Canvas size is `CanvasSize = 2048` and standard tile size is `TileSize = 64`.
-`MaxTileDim = 256` is the protocol's maximum width or height for a tile.
-
-Tile IDs are assigned in row-major grid order. For `cols = ceil(canvas/TileSize)`,
-grid column `col` and row `row` map to `taskId = row*cols + col`; the tile's
-pixel offsets are `x = col*TileSize` and `y = row*TileSize`. Thus the default
-2048px canvas has 32 columns and 1,024 row-major tasks; a 128px canvas has 2
-columns and 4 tasks. Edge tiles use the remaining canvas width or height.
-
-For pixel `(px, py)` in a tile, compute its point independently as:
-
-```text
-(x0 + float64(px)*scale, y0 + float64(py)*scale)
+```json
+{
+  "name": "laptop-01",
+  "cpu": "Intel Core i7-12700H",
+  "cores": 14,
+  "threads": 20,
+  "os": "windows/amd64",
+  "version": "dev"
+}
 ```
 
-Do this calculation per pixel; never accumulate `scale` in a loop. The server
-derives each tile's `x0` and `y0` from the canvas origin and the tile's `x` and
-`y` pixel offsets using the same rule:
+Reply fields: `workerId` is a string; `leaseSec` and `heartbeatSec` are integers in seconds; `jobKind` is a string; `rejoined` is a boolean; `dataset` is an array of file descriptors whose `file` and `sha256` are strings and `size` is an integer byte count.
 
-```text
-tileX0 = canvasX0 + float64(x)*canvasScale
-tileY0 = canvasY0 + float64(y)*canvasScale
+```json
+{
+  "workerId": "worker-01",
+  "leaseSec": 30,
+  "heartbeatSec": 10,
+  "jobKind": "mnist",
+  "rejoined": false,
+  "dataset": [
+    {
+      "file": "train-images-idx3-ubyte.gz",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "size": 9912422
+    }
+  ]
+}
 ```
 
-The kernel has no input pixels, halo, or edge padding. It fills a caller-provided
-RGBA buffer:
+A later hello with the same `name` refers to the same worker, not a new worker. When that worker was marked lost, hello reports `rejoined: true`.
 
-```text
-process_tile(out Uint8Array, x0, y0, scale, w, h, maxIter)
+### `POST /w/pull`
+
+Workers use pull mode: they ask the coordinator for work. The coordinator never pushes tasks.
+
+Request:
+
+```json
+{
+  "workerId": "worker-01"
+}
 ```
 
-`out` has exactly `w*h*4` bytes. Pixels are row-major, beginning at the tile's
-top-left; each pixel contains R, G, B, A bytes.
+The reply is exactly one of these three forms.
 
-The benchmark parameters are exported in `internal/proto` as constants and
-returned by `proto.BenchTile()`:
+Task available (`payload` is opaque JSON and its structure depends on `kind`):
 
-| Parameter | Exact value |
-| --- | ---: |
-| x0 | -0.75 |
-| y0 | 0.1 |
-| scale | 0.005 |
-| w | 64 |
-| h | 64 |
-| maxIter | 256 |
-
-This tile covers a Mandelbrot boundary-detail region. BENCH_RESULT.hash is the
-hex SHA-256 digest of the exact 16,384 RGBA bytes produced for this tile, with no
-metadata included in the digest.
-
-The reference C kernel starts `z` at `(0, 0)` for each pixel and repeatedly
-computes `z = z*z + c` while the iteration count is below `maxIter` and
-`|z|^2 <= 4`. The count increments after each update. Pixels reaching
-`maxIter` are black. For an escaping pixel, calculate the integer
-`shade = 32 + floor(iter * 223 / maxIter)`, then write
-`R = shade`, `G = (shade * 3) mod 256`, and
-`B = 255 - floor(shade / 2)`. Alpha is always 255. These exact rules make the
-benchmark output reproducible for implementations using the same floating-point
-operations.
-
-## Binary frame common rules
-
-Byte 0 is the frame type (`0x01` TASK, `0x02` RESULT). Byte 1 is reserved: the
-encoder always writes zero and the decoder ignores its value. Attempts are
-uint16 and must be nonzero. Tile dimensions must be in 1..256. RESULT payload
-length must equal exactly `w*h*4`; no missing or trailing bytes are accepted.
-
-## TASK (48 bytes, server to worker, no pixels)
-
-| Offset | Size (bytes) | Field | Type / encoding |
-| ---: | ---: | --- | --- |
-| 0 | 1 | type | uint8, value `1` |
-| 1 | 1 | reserved | uint8, write zero; ignore on read |
-| 2 | 2 | attempt | uint16, little-endian, > 0 |
-| 4 | 4 | jobId | uint32, little-endian |
-| 8 | 4 | taskId | uint32, little-endian |
-| 12 | 2 | x | uint16, little-endian |
-| 14 | 2 | y | uint16, little-endian |
-| 16 | 2 | w | uint16, little-endian, 1..256 |
-| 18 | 2 | h | uint16, little-endian, 1..256 |
-| 20 | 8 | x0 | IEEE-754 float64, little-endian, finite |
-| 28 | 8 | y0 | IEEE-754 float64, little-endian, finite |
-| 36 | 8 | scale | IEEE-754 float64, little-endian, finite and > 0 |
-| 44 | 4 | maxIter | uint32, little-endian, > 0 |
-
-Example TASK (jobId 42, taskId `0x01020304`, attempt 2, x 10, y 20, w 2,
-h 1, x0 -2, y0 0.5, scale 1, maxIter 256):
-
-```text
-01 00 02 00 2a 00 00 00 04 03 02 01 0a 00 14 00
-02 00 01 00 00 00 00 00 00 00 00 c0
-00 00 00 00 00 00 e0 3f 00 00 00 00 00 00 f0 3f
-00 01 00 00
+```json
+{
+  "status": "task",
+  "taskId": "task-0001",
+  "kind": "burn",
+  "payload": {"iters": 1000000},
+  "leaseDeadlineUnixMs": 1793030400000,
+  "attempt": 1
+}
 ```
 
-## RESULT (20-byte header plus RGBA pixels, worker to server)
+No task is available now; the worker should wait at least `retryAfterMs` milliseconds before pulling again:
 
-| Offset | Size (bytes) | Field | Type / encoding |
-| ---: | ---: | --- | --- |
-| 0 | 1 | type | uint8, value `2` |
-| 1 | 1 | reserved | uint8, write zero; ignore on read |
-| 2 | 2 | attempt | uint16, little-endian, > 0 |
-| 4 | 4 | jobId | uint32, little-endian |
-| 8 | 4 | taskId | uint32, little-endian |
-| 12 | 2 | w | uint16, little-endian, 1..256 |
-| 14 | 2 | h | uint16, little-endian, 1..256 |
-| 16 | 4 | computeMs | IEEE-754 float32, little-endian, finite and >= 0 |
-| 20 | `w*h*4` | rgba | row-major RGBA bytes, from the tile's top-left |
-
-A 64x64 RESULT is exactly 16,404 bytes: 20-byte header plus 16,384 pixel bytes.
-
-Example RESULT (jobId 42, taskId `0x01020304`, attempt 2, w 2, h 1,
-computeMs 300, pixels `00 01 02 ff` and `10 11 12 ff`):
-
-```text
-02 00 02 00 2a 00 00 00 04 03 02 01 02 00 01 00 00 00 96 43
-00 01 02 ff 10 11 12 ff
+```json
+{
+  "status": "wait",
+  "retryAfterMs": 1000
+}
 ```
 
-## Cross-language test vector
+The job is complete:
 
-These vectors are shared with the worker implementation to detect differences in
-field offsets, byte order, and floating-point encoding. All binary values are
-little-endian as specified above.
-
-### TASK
-
-The fixture is a complete 48-byte TASK frame with jobId `9`, taskId `77`,
-attempt `3`, x/y `128`/`64`, w/h `64`/`64`, x0 `-0.7436438870371587`, y0
-`0.13182590420531197`, scale `4.8828125e-8`, and maxIter `5000`. It was produced
-by the worker's JS encoder (`tools/protocol_test.js`) and cross-checked
-independently.
-
-```text
-01 00 03 00 09 00 00 00 4d 00 00 00 80 00 40 00 40 00 40 00
-be 3c d6 43 ee cb e7 bf ae e9 a9 d5 ab df c0 3f 2d 43 1c eb
-e2 36 6a 3e 88 13 00 00
+```json
+{
+  "status": "done"
+}
 ```
 
-### RESULT
+Workers may join during a job. If the job has not been started, pull returns `wait`.
 
-The frame has attempt `3`, jobId `9`, taskId `77`, w/h `64`/`64`, and
-computeMs `123.5`. Its first 20 bytes are the following header; append exactly
-16,384 zero-valued RGBA bytes to make the complete 16,404-byte frame.
+### `POST /w/result`
 
-```text
-02 00 03 00 09 00 00 00 4d 00 00 00 40 00 40 00 00 00 f7 42
+Submits a task result. `result` is opaque JSON and `seconds` is a floating-point duration in seconds.
+
+Request:
+
+```json
+{
+  "workerId": "worker-01",
+  "taskId": "task-0001",
+  "attempt": 1,
+  "result": {"checksum": "18446744073709551615"},
+  "seconds": 2.75
+}
 ```
+
+Reply:
+
+```json
+{
+  "accepted": true,
+  "reason": "ok"
+}
+```
+
+The allowed `reason` values are `ok`, `duplicate`, `stale`, and `unknown`. A late or duplicate result for an already-completed task is ignored and returns HTTP success with `accepted: false` and `reason: "duplicate"`; it is never an HTTP error. `stale` means the submitted attempt is no longer current; `unknown` means the worker or task is unknown.
+
+```json
+{"accepted": false, "reason": "duplicate"}
+```
+
+### `POST /w/heartbeat`
+
+Reports the task IDs currently running on this worker and extends leases for the tasks it holds.
+
+Request:
+
+```json
+{
+  "workerId": "worker-01",
+  "running": ["task-0001", "task-0002"]
+}
+```
+
+Reply for a known worker:
+
+```json
+{
+  "ok": true,
+  "unknownWorker": false
+}
+```
+
+Reply when the worker ID is unknown:
+
+```json
+{
+  "ok": false,
+  "unknownWorker": true
+}
+```
+
+`unknownWorker: true` tells the worker to call `/w/hello` again. A heartbeat extends leases only for listed tasks held by that worker.
+
+## Task kinds
+
+Workers execute built-in task kinds. Code is never sent over the network.
+
+### `burn`
+
+Payload:
+
+```json
+{"iters": 1000000}
+```
+
+Result:
+
+```json
+{"checksum": "18446744073709551615"}
+```
+
+The unsigned 64-bit checksum is encoded as a decimal JSON string to preserve its full range.
+
+### `mnist`
+
+The payload is a configuration object:
+
+```json
+{
+  "hidden": 128,
+  "lr": 0.01,
+  "epochs": 5,
+  "batch": 64,
+  "seed": 12345
+}
+```
+
+Result:
+
+```json
+{
+  "valAcc": 0.97,
+  "valLoss": 0.12,
+  "trainSec": 8.43
+}
+```
+
+The MNIST payload and result are proposals pending P2 sign-off.
+
+## Other endpoints
+
+### `GET /api/job`
+
+Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, and `mismatched`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
+
+```json
+{
+  "jobId": "mnist-search-01",
+  "state": "running",
+  "total": 360,
+  "done": 42,
+  "inFlight": 8,
+  "requeued": 2,
+  "elapsedSec": 120.5,
+  "etaSec": 900.0,
+  "workers": [
+    {
+      "id": "worker-01",
+      "cpu": "Intel Core i7-12700H",
+      "cores": 14,
+      "threads": 20,
+      "tasksDone": 10,
+      "speed": 0.083,
+      "status": "active"
+    }
+  ],
+  "leaderboard": [
+    {
+      "config": {"hidden": 128, "lr": 0.01, "epochs": 5, "batch": 64, "seed": 12345},
+      "valAcc": 0.97
+    }
+  ],
+  "verify": {"sampled": 3, "matched": 2, "mismatched": 1},
+  "baseline": {"seconds": 12.4, "label": "single-worker"},
+  "best": {
+    "config": {"hidden": 128, "lr": 0.01, "epochs": 5, "batch": 64, "seed": 12345},
+    "valAcc": 0.97
+  }
+}
+```
+
+### `GET /api/result`
+
+Before completion, returns:
+
+```json
+{"ready": false}
+```
+
+The design specifies that this endpoint returns the final result, but does not define the JSON shape of its `ready: true` response. That shape must be agreed before implementing or consuming it; this document does not add fields to the contract.
+
+### `POST /api/job/start`
+
+Starts the job by transitioning state from `waiting` to `running`. No request body or response body/status is specified in this design. The transition is the endpoint's defined effect.
+
+### `GET /dataset/<file>`
+
+Serves the named dataset file from the coordinator. The response body is the file's raw bytes, not JSON. Dataset transfer encoding/content type is not specified here.
+
+### `GET /healthz`
+
+Returns the text `ok` (plain text, not JSON).
+
+### `GET /`
+
+Serves the static frontend from `web/`. The response is frontend content, not a JSON API response.
+
+## Semantics
+
+- **Pull mode:** workers request work; the coordinator does not push it.
+- **Leases:** a task is leased to one worker until its deadline. Heartbeats extend leases for listed tasks held by that worker. On expiry, the task is requeued and the worker is marked `lost`.
+- **Rejoining:** a worker marked `lost` that later calls hello or heartbeat becomes `rejoined`. Hello uses the worker's stable name to identify it.
+- **Verification:** the coordinator may issue the same `taskId` again with a different `attempt` to a different worker for verification. The worker is not told that this is a verification run.
+- **Joining during a job:** workers may join after the job begins. Before the job is started, pulls return `wait`.
+- **No remote code:** workers select built-in executors by task `kind`; executable code is never transmitted.
+- **Authentication:** v1 has none and is intended for a trusted LAN.
+
+## Worker lifecycle example
+
+1. Worker `laptop-01` sends `POST /w/hello` and receives `workerId: "worker-01"`.
+2. It sends `POST /w/pull`; the coordinator returns task `task-0001`, attempt `1`, and a lease deadline.
+3. While executing, it sends `POST /w/heartbeat` with `running: ["task-0001"]`; the coordinator extends the lease.
+4. It sends `POST /w/result` with that task ID and attempt. The coordinator replies `{"accepted":true,"reason":"ok"}`.
+5. It pulls again. The coordinator returns another task, `wait`, or `done` according to job state and available work.
+
+## Worker killed timeline
+
+Example timings use a 30-second lease and 10-second heartbeat interval; values come from `/w/hello` and can vary.
+
+| Time | Event | Coordinator state |
+| --- | --- | --- |
+| 12:00:00 | Worker pulls `task-0042`, attempt 1; lease expires at 12:00:30. | Task leased to worker; worker active. |
+| 12:00:10 | Worker sends heartbeat listing `task-0042`. | Lease is extended. |
+| 12:00:12 | Worker is killed; it sends no more heartbeats or result. | Task remains leased until its deadline. |
+| 12:00:30 | Lease expires without another heartbeat. | Task is requeued; worker marked lost. |
+| 12:00:31 | Another worker pulls `task-0042`. | The task is issued again with a new attempt. |
+| 12:00:40 | Original worker starts again and calls hello with the same name. | It is recognized as the same worker and reports `rejoined: true`. |
+
+## Error handling
+
+Malformed JSON request bodies return HTTP `400` with a JSON error object. Example:
+
+```json
+{"error": "unexpected end of JSON input"}
+```
+
+No other HTTP error status or error body is defined by this protocol.
+
+## Change policy
+
+Edit this document first, then update code, and tell the team about the change. Never rename or remove an `/api/job` field without telling P3.
