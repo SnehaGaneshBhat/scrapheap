@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,17 +30,14 @@ func main() {
 	maxIter := flag.Uint("maxiter", 1000, "maximum Mandelbrot iterations")
 	benchHash := flag.String("bench-hash", "", "expected benchmark output SHA-256 (empty accepts and logs all hashes)")
 	heartbeatTimeout := flag.Duration("heartbeat-timeout", 5*time.Second, "worker heartbeat timeout")
-	modeName := flag.String("mode", "aware", "scheduler policy: plain or aware")
+	modeName := flag.String("mode", "aware", "scheduler policy: pull, plain (alias for pull), or aware")
+	publicHost := flag.String("host", "", "public host name or IP used in displayed URLs and snapshots")
 	verbose := flag.Bool("verbose", false, "log per-task activity")
 	flag.Parse()
 
-	mode := sched.CapabilityAware
-	switch strings.ToLower(*modeName) {
-	case "aware":
-	case "plain":
-		mode = sched.PlainPull
-	default:
-		log.Fatalf("invalid -mode %q: expected plain or aware", *modeName)
+	mode, err := parseSchedulerMode(*modeName)
+	if err != nil {
+		log.Fatal(err)
 	}
 	if math.IsNaN(*x0) || math.IsInf(*x0, 0) || math.IsNaN(*y0) || math.IsInf(*y0, 0) || math.IsNaN(*scale) || math.IsInf(*scale, 0) || *scale <= 0 || *maxIter == 0 || uint64(*maxIter) > uint64(^uint32(0)) {
 		log.Fatal("view coordinates and scale must be finite, scale and maxiter must be positive, and maxiter must fit uint32")
@@ -58,6 +56,7 @@ func main() {
 		Job:               hub.JobConfig{X0: *x0, Y0: *y0, Scale: *scale, MaxIter: uint32(*maxIter), CanvasSize: 2048},
 		ExpectedBenchHash: *benchHash,
 		HeartbeatTimeout:  *heartbeatTimeout,
+		PublicHost:        *publicHost,
 	}
 	workerHub := hub.New(config, newLogCollector(*verbose), nil)
 	root, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -74,7 +73,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	printURLs(listener.Addr())
+	printURLs(listener.Addr(), *publicHost)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 	select {
@@ -92,9 +91,24 @@ func main() {
 	}
 }
 
-func printURLs(addr net.Addr) {
+func parseSchedulerMode(value string) (sched.Mode, error) {
+	switch strings.ToLower(value) {
+	case "aware":
+		return sched.CapabilityAware, nil
+	case "pull", "plain":
+		return sched.PlainPull, nil
+	default:
+		return sched.PlainPull, fmt.Errorf("invalid -mode %q: expected pull, plain, or aware", value)
+	}
+}
+
+func printURLs(addr net.Addr, publicHost string) {
 	tcp, ok := addr.(*net.TCPAddr)
 	if !ok {
+		return
+	}
+	if publicHost != "" {
+		printURLPair(strings.Trim(publicHost, "[]"), tcp.Port)
 		return
 	}
 	found := false
@@ -116,15 +130,24 @@ func printURLs(addr net.Addr) {
 			case *net.IPAddr:
 				ip = value.IP
 			}
-			ip = ip.To4()
-			if ip == nil || ip.IsLoopback() {
+			if !isPrintableIPv4(ip) {
 				continue
 			}
-			fmt.Printf("Worker URL:    http://%s:%d/worker\nDashboard URL: http://%s:%d/dash\n", ip, tcp.Port, ip, tcp.Port)
+			printURLPair(ip.To4().String(), tcp.Port)
 			found = true
 		}
 	}
 	if !found {
 		log.Printf("no non-loopback IPv4 addresses found; listening on %s", addr)
 	}
+}
+
+func isPrintableIPv4(ip net.IP) bool {
+	ipv4 := ip.To4()
+	return ipv4 != nil && !ipv4.IsLoopback() && !ipv4.IsLinkLocalUnicast()
+}
+
+func printURLPair(host string, port int) {
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	fmt.Printf("Worker URL:    http://%s/worker\nDashboard URL: http://%s/dash\n", address, address)
 }

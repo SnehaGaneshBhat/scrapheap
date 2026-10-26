@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/scrap-heap/backend/internal/hub"
 	"github.com/scrap-heap/backend/internal/proto"
+	"github.com/scrap-heap/backend/internal/sched"
 )
 
 type testWorker struct {
@@ -34,14 +35,20 @@ type testWorker struct {
 }
 
 type apiSnapshot struct {
-	JobID   uint32 `json:"jobId"`
-	Done    int    `json:"done"`
-	Total   int    `json:"total"`
-	Devices int    `json:"devices"`
+	JobID      uint32   `json:"jobId"`
+	Done       int      `json:"done"`
+	Total      int      `json:"total"`
+	Devices    int      `json:"devices"`
+	Mode       string   `json:"mode"`
+	View       hub.View `json:"view"`
+	Canvas     int      `json:"canvas"`
+	TileSize   int      `json:"tileSize"`
+	Cols       int      `json:"cols"`
+	PublicHost string   `json:"publicHost"`
 }
 
 func TestServerAPIRunAndTiles(t *testing.T) {
-	workerHub := hub.New(hub.Config{Job: hub.JobConfig{X0: -2.5, Y0: -1.75, Scale: .01, MaxIter: 40, CanvasSize: 128}, HeartbeatTimeout: 4 * time.Second}, newLogCollector(false), nil)
+	workerHub := hub.New(hub.Config{Mode: sched.CapabilityAware, Job: hub.JobConfig{X0: -2.5, Y0: -1.75, Scale: .01, MaxIter: 40, CanvasSize: 128}, HeartbeatTimeout: 4 * time.Second, PublicHost: "worker.example"}, newLogCollector(false), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go workerHub.Run(ctx)
 	server := httptest.NewServer(newHTTPHandler(workerHub, t.TempDir()))
@@ -63,7 +70,20 @@ func TestServerAPIRunAndTiles(t *testing.T) {
 	firstJob := postJob(t, api, server.URL)
 	waitForDone(t, api, server.URL, firstJob)
 	checkDone(t, api, server.URL, firstJob, 4)
-	response, err := api.Get(server.URL + "/api/tile/0")
+	response, err := api.Get(server.URL + "/api/job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot apiSnapshot
+	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if snapshot.Mode != "aware" || snapshot.View != (hub.View{X0: -2.5, Y0: -1.75, Scale: .01, MaxIter: 40}) || snapshot.Canvas != 128 || snapshot.TileSize != 64 || snapshot.Cols != 2 || snapshot.PublicHost != "worker.example" {
+		t.Fatalf("snapshot metadata=%+v", snapshot)
+	}
+	response, err = api.Get(server.URL + "/api/tile/0")
 	if err != nil {
 		t.Fatal(err)
 	}

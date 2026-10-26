@@ -20,7 +20,7 @@ func newLogCollector(verbose bool) *logCollector {
 }
 
 func (c *logCollector) DeviceJoined(now time.Time, id string, info hub.DeviceInfo) {
-	log.Printf("device joined id=%s threads=%d mock=%t perThread=%.3f hash-throughput=%.3f", id, info.Threads, info.Mock, info.PerThread, info.TilesPerSec)
+	log.Printf("device joined id=%s threads=%d mock=%t perThread=%.3f tilesPerSec=%.3f", id, info.Threads, info.Mock, info.PerThread, info.TilesPerSec)
 }
 func (c *logCollector) DeviceLeft(_ time.Time, id string) { log.Printf("device left id=%s", id) }
 func (c *logCollector) JobStart(now time.Time, jobID uint32, tiles int) {
@@ -40,10 +40,13 @@ func (c *logCollector) TaskAssigned(_ time.Time, deviceID string, threadID int, 
 		log.Printf("task assigned device=%s thread=%d task=%d attempt=%d", deviceID, threadID, taskID, attempt)
 	}
 }
-func (c *logCollector) TaskAccepted(_ time.Time, deviceID string, taskID uint32, attempt uint16, computeMs float32) {
+func (c *logCollector) TaskAccepted(_ time.Time, deviceID string, taskID uint32, attempt uint16, computeMs float32, verified hub.VerifyStatus) {
 	if c.verbose {
-		log.Printf("task accepted device=%s task=%d attempt=%d computeMs=%.3f", deviceID, taskID, attempt, computeMs)
+		log.Printf("task accepted device=%s task=%d attempt=%d computeMs=%.3f verified=%d", deviceID, taskID, attempt, computeMs, verified)
 	}
+}
+func (c *logCollector) VerifyFailed(_ time.Time, deviceID string, taskID uint32, attempt uint16, mismatched int) {
+	log.Printf("verification failed device=%s task=%d attempt=%d mismatched=%d", deviceID, taskID, attempt, mismatched)
 }
 func (c *logCollector) TaskRequeued(_ time.Time, taskID uint32, attempt uint16, reason sched.RequeueReason) {
 	log.Printf("task requeued task=%d attempt=%d reason=%s", taskID, attempt, reason)

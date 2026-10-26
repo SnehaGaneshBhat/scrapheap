@@ -19,8 +19,17 @@ type events struct {
 	left             int
 	assigned         int
 	accepted         int
+	verified         []VerifyStatus
+	verifyFailures   []verifyFailure
 	duplicate, stale int
 	done             int
+}
+
+type verifyFailure struct {
+	device     string
+	task       uint32
+	attempt    uint16
+	mismatched int
 }
 
 func (e *events) DeviceJoined(_ time.Time, _ string, i DeviceInfo) {
@@ -36,10 +45,16 @@ func (e *events) TaskAssigned(time.Time, string, int, uint32, uint16) {
 	defer e.Unlock()
 	e.assigned++
 }
-func (e *events) TaskAccepted(time.Time, string, uint32, uint16, float32) {
+func (e *events) TaskAccepted(_ time.Time, _ string, _ uint32, _ uint16, _ float32, status VerifyStatus) {
 	e.Lock()
 	defer e.Unlock()
 	e.accepted++
+	e.verified = append(e.verified, status)
+}
+func (e *events) VerifyFailed(_ time.Time, device string, task uint32, attempt uint16, mismatched int) {
+	e.Lock()
+	defer e.Unlock()
+	e.verifyFailures = append(e.verifyFailures, verifyFailure{device: device, task: task, attempt: attempt, mismatched: mismatched})
 }
 func (*events) TaskRequeued(time.Time, uint32, uint16, sched.RequeueReason) {}
 
@@ -54,8 +69,12 @@ func (e *events) DupDropped(_ time.Time, _ uint32, _ uint16, stale bool) {
 }
 
 func startTestHub(t *testing.T, cfg Config, collector Collector) (*Hub, *httptest.Server, context.CancelFunc) {
+	return startTestHubWithVerifier(t, cfg, collector, nil)
+}
+
+func startTestHubWithVerifier(t *testing.T, cfg Config, collector Collector, verifier Verifier) (*Hub, *httptest.Server, context.CancelFunc) {
 	t.Helper()
-	h := New(cfg, collector, nil)
+	h := New(cfg, collector, verifier)
 	ctx, cancel := context.WithCancel(context.Background())
 	go h.Run(ctx)
 	server := httptest.NewServer(h.Handler())
@@ -169,6 +188,65 @@ func TestFullJobAndStore(t *testing.T) {
 	if e.accepted != 4 || e.done != 1 {
 		t.Fatalf("events accepted=%d done=%d", e.accepted, e.done)
 	}
+	for _, status := range e.verified {
+		if status != NotChecked {
+			t.Fatalf("default verifier status=%d, want NotChecked", status)
+		}
+	}
+}
+
+type acceptingVerifier struct{}
+
+func (acceptingVerifier) Verify(proto.Task, []byte) (bool, int) { return true, 0 }
+
+type rejectingVerifier struct{}
+
+func (rejectingVerifier) Verify(proto.Task, []byte) (bool, int) { return false, 5 }
+
+func TestVerifierStatusAndFailureEvent(t *testing.T) {
+	t.Run("configured verifier pass", func(t *testing.T) {
+		e := &events{}
+		h, srv, _ := startTestHubWithVerifier(t, Config{Job: JobConfig{X0: -2, Y0: -1, Scale: .01, MaxIter: 10, CanvasSize: 64}}, e, acceptingVerifier{})
+		c, _ := connectWorker(t, srv, "verified", 1, false)
+		h.StartNewJob()
+		readJSONType(t, c, proto.MessageJobStarted)
+		sendJSON(t, c, proto.Message{Type: proto.MessageRequestTask})
+		task := readTask(t, c)
+		sendResult(t, c, task)
+		readJSONType(t, c, proto.MessageAck)
+		e.Lock()
+		defer e.Unlock()
+		if len(e.verified) != 1 || e.verified[0] != Passed {
+			t.Fatalf("statuses=%v, want [Passed]", e.verified)
+		}
+	})
+	t.Run("verifier rejection", func(t *testing.T) {
+		e := &events{}
+		h, srv, _ := startTestHubWithVerifier(t, Config{Job: JobConfig{X0: -2, Y0: -1, Scale: .01, MaxIter: 10, CanvasSize: 64}}, e, rejectingVerifier{})
+		c, _ := connectWorker(t, srv, "rejected", 1, false)
+		// Test the failure callback directly through the result path.
+		// The one-task job leaves the rejected lease pending until it expires.
+		h.StartNewJob()
+		readJSONType(t, c, proto.MessageJobStarted)
+		sendJSON(t, c, proto.Message{Type: proto.MessageRequestTask})
+		task := readTask(t, c)
+		sendResult(t, c, task)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			e.Lock()
+			n := len(e.verifyFailures)
+			e.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		e.Lock()
+		defer e.Unlock()
+		if len(e.verifyFailures) != 1 || e.verifyFailures[0].mismatched != 5 {
+			t.Fatalf("failures=%+v", e.verifyFailures)
+		}
+	})
 }
 func TestDisconnectRequeuesAndMockMetadata(t *testing.T) {
 	e := &events{}

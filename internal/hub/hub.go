@@ -35,15 +35,30 @@ type Config struct {
 	ExpectedBenchHash string
 	TickInterval      time.Duration
 	HeartbeatTimeout  time.Duration
+	PublicHost        string
 	Clock             Clock
+}
+
+// View is the configured coordinate view for the current job.
+type View struct {
+	X0      float64 `json:"x0"`
+	Y0      float64 `json:"y0"`
+	Scale   float64 `json:"scale"`
+	MaxIter uint32  `json:"maxIter"`
 }
 
 // Snapshot is a point-in-time overview of the active job.
 type Snapshot struct {
-	JobID   uint32
-	Done    int
-	Total   int
-	Devices int
+	JobID      uint32 `json:"jobId"`
+	Done       int    `json:"done"`
+	Total      int    `json:"total"`
+	Devices    int    `json:"devices"`
+	Mode       string `json:"mode"`
+	View       View   `json:"view"`
+	Canvas     int    `json:"canvas"`
+	TileSize   int    `json:"tileSize"`
+	Cols       int    `json:"cols"`
+	PublicHost string `json:"publicHost"`
 }
 
 type outbound struct {
@@ -90,6 +105,7 @@ type Hub struct {
 	cfg       Config
 	collector Collector
 	verifier  Verifier
+	verified  bool
 	commands  chan command
 	done      chan struct{}
 	mu        sync.RWMutex
@@ -113,10 +129,11 @@ func New(cfg Config, collector Collector, verifier Verifier) *Hub {
 	if collector == nil {
 		collector = NopCollector{}
 	}
+	verified := verifier != nil
 	if verifier == nil {
 		verifier = acceptAll{}
 	}
-	return &Hub{cfg: cfg, collector: collector, verifier: verifier, commands: make(chan command), done: make(chan struct{})}
+	return &Hub{cfg: cfg, collector: collector, verifier: verifier, verified: verified, commands: make(chan command), done: make(chan struct{})}
 }
 
 // Run starts the sole state-owning loop and returns when ctx is canceled.
@@ -178,7 +195,17 @@ func (h *Hub) StartNewJob() uint32 {
 // Snapshot returns job progress and registered device count.
 func (h *Hub) Snapshot() Snapshot {
 	v := h.call(func(s *state) any {
-		return Snapshot{JobID: s.jobID, Done: s.store.Count(), Total: s.total, Devices: len(s.devices)}
+		mode := "pull"
+		if s.h.cfg.Mode == sched.CapabilityAware {
+			mode = "aware"
+		}
+		job := s.h.cfg.Job
+		cols := 0
+		if job.CanvasSize > 0 {
+			cols = (job.CanvasSize + proto.TileSize - 1) / proto.TileSize
+		}
+		return Snapshot{JobID: s.jobID, Done: s.store.Count(), Total: s.total, Devices: len(s.devices), Mode: mode,
+			View: View{X0: job.X0, Y0: job.Y0, Scale: job.Scale, MaxIter: job.MaxIter}, Canvas: job.CanvasSize, TileSize: proto.TileSize, Cols: cols, PublicHost: s.h.cfg.PublicHost}
 	})
 	if snap, ok := v.(Snapshot); ok {
 		return snap
@@ -411,21 +438,30 @@ func (s *state) result(c *client, r proto.Result, now time.Time) {
 		log.Printf("hub: rejected wrong-size result device=%s task=%d", c.id, r.TaskID)
 		return
 	}
+	verified := NotChecked
 	if valid, mismatched := s.h.verifier.Verify(task, r.RGBA); !valid {
 		log.Printf("hub: verifier rejected task=%d mismatched=%d", r.TaskID, mismatched)
+		s.h.collector.VerifyFailed(now, c.id, r.TaskID, r.Attempt, mismatched)
 		return
 	}
-	s.apply(s.scheduler.Handle(sched.ResultReceived{Now: now, DeviceID: c.id, JobID: r.JobID, TaskID: r.TaskID, Attempt: r.Attempt, ComputeMs: r.ComputeMs}), c, r)
+	if s.h.verified {
+		verified = Passed
+	}
+	s.apply(s.scheduler.Handle(sched.ResultReceived{Now: now, DeviceID: c.id, JobID: r.JobID, TaskID: r.TaskID, Attempt: r.Attempt, ComputeMs: r.ComputeMs}), c, r, verified)
 }
 
 func (s *state) apply(actions []sched.Action, accepted ...any) {
 	var source *client
 	var result proto.Result
+	verified := NotChecked
 	if len(accepted) > 0 {
 		source, _ = accepted[0].(*client)
 	}
 	if len(accepted) > 1 {
 		result, _ = accepted[1].(proto.Result)
+	}
+	if len(accepted) > 2 {
+		verified, _ = accepted[2].(VerifyStatus)
 	}
 	for _, a := range actions {
 		switch v := a.(type) {
@@ -449,7 +485,7 @@ func (s *state) apply(actions []sched.Action, accepted ...any) {
 		case sched.TaskAccepted:
 			if source != nil {
 				s.store.Put(v.TaskID, result.RGBA)
-				s.h.collector.TaskAccepted(s.h.cfg.Clock(), v.DeviceID, v.TaskID, v.Attempt, v.ComputeMs)
+				s.h.collector.TaskAccepted(s.h.cfg.Clock(), v.DeviceID, v.TaskID, v.Attempt, v.ComputeMs, verified)
 				for c := range s.clients {
 					for key := range c.tasks {
 						if key.jobID == v.JobID && key.taskID == v.TaskID {

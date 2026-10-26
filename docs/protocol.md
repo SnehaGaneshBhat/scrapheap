@@ -11,6 +11,14 @@ zero-based from the start of a WebSocket message.
 - The dashboard connects to `/ws/dash`.
 - WebSocket text frames contain UTF-8 JSON messages.
 - WebSocket binary frames contain TASK or RESULT frames.
+- `GET /api/job` returns a JSON snapshot with `jobId`, `done`, `total`,
+  `devices`, `mode`, `view` (`x0`, `y0`, `scale`, `maxIter`), `canvas`,
+  `tileSize`, `cols`, and `publicHost`. `mode` is `pull` or `aware`.
+- `publicHost` is the configured public hostname/IP (`-host`) or the empty string
+  when no public host was configured. The scheduler CLI mode `plain` aliases
+  `pull`; both serialize in the snapshot as `pull`.
+- `GET /api/tile/{taskId}` returns accepted tile bytes as raw RGBA with
+  `Content-Type: application/octet-stream` and `X-Job-Id`.
 
 Unknown extra JSON fields are ignored. Unknown JSON `type` values are rejected
 with `UnknownMessageTypeError`.
@@ -53,6 +61,12 @@ again.
 
 Canvas size is `CanvasSize = 2048` and standard tile size is `TileSize = 64`.
 `MaxTileDim = 256` is the protocol's maximum width or height for a tile.
+
+Tile IDs are assigned in row-major grid order. For `cols = ceil(canvas/TileSize)`,
+grid column `col` and row `row` map to `taskId = row*cols + col`; the tile's
+pixel offsets are `x = col*TileSize` and `y = row*TileSize`. Thus the default
+2048px canvas has 32 columns and 1,024 row-major tasks; a 128px canvas has 2
+columns and 4 tasks. Edge tiles use the remaining canvas width or height.
 
 For pixel `(px, py)` in a tile, compute its point independently as:
 

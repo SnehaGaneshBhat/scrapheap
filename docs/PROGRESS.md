@@ -281,3 +281,43 @@
 - What the next task depends on:
   - Teammates can replace mock benchmark/tile work with the browser WASM worker while preserving `docs/protocol.md`.
   - The dashboard and QR owners can add their route registrations in the server entry point when their files are ready.
+
+## Collector and snapshot adjustments (2026-10-26 13:05 Asia/Calcutta)
+- What was built:
+  - Added verifier status reporting: accepted results are `Passed` only with a configured verifier; the default accept-all path reports `NotChecked`. Rejected results emit `VerifyFailed` with the mismatch count.
+  - Expanded hub/API snapshots with scheduler mode, view, canvas, tile size, grid columns, and configured public host.
+  - Added `pull` mode and retained `plain` as its CLI alias; filtered loopback and IPv4 link-local addresses from printed URLs, with `-host` overriding interface enumeration.
+  - Verified row-major task IDs for the default and 128px canvases and documented the task/grid mapping.
+- Files created/changed:
+  - `internal/hub/collector.go` — verification status type and updated collector callbacks.
+  - `internal/hub/hub.go` — verifier outcome callbacks, expanded snapshot, and mode/view/grid/public-host values.
+  - `internal/hub/hub_test.go` — default/custom verifier status and rejection callback tests.
+  - `internal/hub/job_test.go` — row-major task ID tests at 2048px and 128px.
+  - `cmd/server/main.go` — mode alias, `-host`, URL filtering, and explicit-host URL output.
+  - `cmd/server/api.go` — full Snapshot JSON output for `/api/job`.
+  - `cmd/server/logcollector.go` — `tilesPerSec` log label and verification logging.
+  - `cmd/server/api_test.go` — API snapshot metadata assertions.
+  - `cmd/server/main_test.go` — LAN address filter and scheduler-mode parsing tests.
+  - `docs/protocol.md` — snapshot shape, public host behavior, mode alias, and row-major task ID contract.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `hub.VerifyStatus uint8` with `NotChecked` and `Passed`.
+  - `Collector.TaskAccepted(time.Time, string, uint32, uint16, float32, VerifyStatus)` and `Collector.VerifyFailed(time.Time, string, uint32, uint16, int)`.
+  - `hub.Snapshot` JSON fields: `jobId`, `done`, `total`, `devices`, `mode`, `view`, `canvas`, `tileSize`, `cols`, `publicHost`; `View` contains `x0`, `y0`, `scale`, `maxIter`.
+  - Server `-mode` accepts `pull`, `aware`, and alias `plain`; `-host` sets Snapshot `publicHost` and the sole displayed worker/dashboard hostname.
+- How to run/test:
+  - `go fmt ./...` — passed.
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test ./...` — passed (exit 0): server, hub, proto, and scheduler packages passed; mockworker has no tests.
+  - `go test ./... -race` — failed before tests ran: `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in` while building `runtime/cgo`.
+- Decisions & deviations from this spec, and why:
+  - Snapshot mode is derived from the scheduler mode and always serialized as `pull` or `aware`; the legacy CLI value `plain` is normalized to `pull`.
+  - `-host` is treated as a hostname/IP without a port; the server appends the actual bound port. The exact configured host string is exposed as `publicHost`.
+  - No pixel data was added to collector callbacks; accepted pixels remain in TileStore and are retrieved through the existing tile API.
+- Known issues / TODOs / things you were unsure about:
+  - Race-enabled tests remain unavailable because the installed MinGW compiler lacks 64-bit mode.
+  - URL output is unit-tested through the IPv4 filter; actual interface discovery depends on the coordinator host's active interfaces.
+- What the next task depends on:
+  - The dashboard can consume the expanded `/api/job` snapshot and `VerifyStatus` collector results.
+  - QR generation can use `Snapshot.PublicHost` when it is configured.

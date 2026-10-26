@@ -27,13 +27,7 @@ func newHTTPHandler(h *hub.Hub, webDir string) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		snapshot := h.Snapshot()
-		writeJSON(w, struct {
-			JobID   uint32 `json:"jobId"`
-			Done    int    `json:"done"`
-			Total   int    `json:"total"`
-			Devices int    `json:"devices"`
-		}{snapshot.JobID, snapshot.Done, snapshot.Total, snapshot.Devices})
+		writeJSON(w, h.Snapshot())
 	})
 	mux.HandleFunc("/api/tile/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
