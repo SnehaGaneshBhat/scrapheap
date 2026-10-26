@@ -321,3 +321,95 @@
 - What the next task depends on:
   - The dashboard can consume the expanded `/api/job` snapshot and `VerifyStatus` collector results.
   - QR generation can use `Snapshot.PublicHost` when it is configured.
+## C Mandelbrot WASM kernel source (2026-10-26 12:24 Asia/Calcutta)
+- What was built:
+  - Added a C `process_tile` implementation matching the protocol's tile inputs and row-major RGBA output.
+  - Defined black interior pixels, opaque alpha, and a deterministic integer escape-iteration palette.
+  - Documented the Emscripten build command and browser worker responsibilities.
+- Files created/changed:
+  - `wasm/mandelbrot.c` — C source for rendering one Mandelbrot tile.
+  - `wasm/README.md` — kernel contract, color rule, and WASM build instructions.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - C ABI: `void process_tile(uint8_t *out, double x0, double y0, double scale, int w, int h, int max_iter)`.
+  - Output is exactly `w*h*4` caller-allocated bytes in row-major RGBA order; alpha is 255.
+- How to run/test:
+  - `gcc -std=c11 -Wall -Wextra -Werror -c wasm/mandelbrot.c -o /tmp/scrapheap-mandelbrot.o` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed (hub, proto, and sched packages; cmd/server has no tests).
+  - Emscripten WASM build — not run; `emcc` is not installed in this environment.
+- Decisions & deviations from this spec, and why:
+  - Kept transport and WASM memory allocation in the browser worker, leaving the kernel focused on pixel computation as specified by the shared contract.
+  - Chose and documented a deterministic integer palette because the protocol specified RGBA layout but did not specify colors.
+- Known issues / TODOs / things you were unsure about:
+  - Teammates implementing the worker and server-side verifier must use the same color rule; the benchmark hash depends on exact output bytes.
+  - The `.wasm` module and generated Emscripten JavaScript loader have not been built or run because `emcc` is unavailable here.
+- What the next task depends on:
+  - Install/use Emscripten to build the module, then have the browser worker load it, allocate output memory, call `process_tile`, and package the bytes in a RESULT frame.
+
+## Browser check for C Mandelbrot WASM kernel (2026-10-26 13:24 Asia/Calcutta)
+- What was built:
+  - Added a standalone browser page that loads the generated WASM module, renders the protocol benchmark tile, displays it on a canvas, and prints render time and SHA-256.
+  - Built the C source into a WebAssembly module and Emscripten ES module loader using a temporary toolchain unpacked under `/tmp`.
+  - Documented the exact Mandelbrot iteration and color rules in the shared protocol.
+- Files created/changed:
+  - `wasm/demo.html` — standalone one-tile browser demo page.
+  - `wasm/demo.js` — loads WASM, renders benchmark tile, and displays timing/hash.
+  - `wasm/mandelbrot.js` — generated Emscripten ES module loader.
+  - `wasm/mandelbrot.wasm` — generated compiled C renderer.
+  - `wasm/README.md` — build and run directions, including the local static-server command.
+  - `docs/protocol.md` — shared Mandelbrot iteration and RGBA palette definition.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - Browser page: `wasm/demo.html`; it calls `_process_tile` with the fixed benchmark parameters and draws 64x64 RGBA output.
+  - Benchmark RGBA SHA-256 from this WASM build: `6c7b3c88fa49c6c8df555c082a3e3b2b01b10af9b816875efbbfdbbe17537067`.
+- How to run/test:
+  - Emscripten 3.1.6 compile with `-O2`, modular ES6 output, `web,worker` environment, and exported `process_tile`, `malloc`, `free` — passed (exit 0).
+  - Node WASM execution on the benchmark tile — passed; output length 16,384 bytes, all alpha bytes 255, non-black pixels present, first pixel `[32,224,160,255]`.
+  - `node --check wasm/demo.js` — passed (exit 0).
+  - Firefox headless fetched `demo.html`, `demo.js`, `mandelbrot.js`, and `mandelbrot.wasm` successfully from the local static server (HTTP 200, then 304 on repeat). Firefox did not produce a screenshot file; the displayed preview was generated from the actual WASM output buffer.
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed; hub, proto, and sched packages passed; cmd/server has no tests.
+  - `git diff --check` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - Kept the check in `wasm/` rather than editing the team-owned `web/` UI; it runs locally and is not connected to the coordinator.
+  - The Emscripten and compiler packages were downloaded and unpacked into `/tmp`; no system-wide installation or new Go dependency was made.
+- Known issues / TODOs / things you were unsure about:
+  - The browser demo calls the kernel directly; it does not yet implement the worker WebSocket lifecycle or exchange TASK/RESULT frames with the Go server.
+  - Browser-loaded assets were confirmed by Firefox HTTP requests, while pixel buffer semantics were validated by executing the same WASM module under Node.
+- What the next task depends on:
+  - The worker implementation should import the Emscripten module, allocate `w*h*4` bytes, call `_process_tile` from a Web Worker, and package those bytes using the binary RESULT contract.
+
+## Full-resolution Mandelbrot WASM preview (2026-10-26 14:00 Asia/Calcutta)
+- What was built:
+  - Replaced the one-tile preview with a 2048x2048 canvas rendered from all 1,024 64x64 tiles using the coordinator's default view parameters.
+  - Added progressive tile count and a Download PNG button for the completed full-resolution image.
+  - Increased palette brightness and updated the shared protocol's exact color rule, then rebuilt the WASM module.
+- Files created/changed:
+  - `wasm/demo.html` — full-resolution render page and PNG download button.
+  - `wasm/demo.js` — tile loop, row-major assembly, progress, and PNG download.
+  - `wasm/mandelbrot.c` — higher-contrast escape-time palette.
+  - `wasm/mandelbrot.js` — regenerated Emscripten loader.
+  - `wasm/mandelbrot.wasm` — rebuilt C kernel.
+  - `wasm/README.md` — full-resolution demo instructions and build environment note.
+  - `docs/protocol.md` — updated shared color formula.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `wasm/demo.html` renders a 2048x2048 image from 1,024 64x64 calls to `_process_tile` and saves it as `mandelbrot-2048x2048.png`.
+  - Full image SHA-256 with the current palette: `09b764828f458c934be09b25de4fcccfcc33b6d1d3faec5aa52e438c93ffe2cf`.
+- How to run/test:
+  - Emscripten 3.1.6 rebuild — passed (exit 0).
+  - Node execution of all 1,024 WASM tiles — passed; assembled 2048x2048 RGBA image (16,777,216 bytes), all alpha bytes 255.
+  - `node --check wasm/demo.js` — passed (exit 0).
+  - Firefox fetched the revised page, JS loader, and WASM module successfully (HTTP 200); the headless browser remained open during rendering and was stopped, so full DOM completion was not verified there.
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed; hub, proto, and sched packages passed; cmd/server has no tests.
+  - `git diff --check` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - The local demo renders the same complete image job as one browser page for visual checking; it does not simulate distribution or connect to the coordinator.
+  - Kept the canvas at its actual 2048x2048 resolution and scaled it responsively in CSS; PNG download preserves the full pixel dimensions.
+- Known issues / TODOs / things you were unsure about:
+  - The full preview uses the browser page's main thread and sequentially calls the kernel; move calls into Web Workers when implementing the real client.
+  - The generated PNG preview is in `/tmp/mandelbrot-full.png`; it is a temporary verification artifact, while the browser page can download a PNG locally.
+- What the next task depends on:
+  - The worker page should reuse the same 64x64 tile parameters and copy returned pixels into its displayed 2048x2048 canvas while actual coordinator assignments arrive over WebSocket.

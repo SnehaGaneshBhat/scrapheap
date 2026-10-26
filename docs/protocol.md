@@ -109,6 +109,16 @@ This tile covers a Mandelbrot boundary-detail region. BENCH_RESULT.hash is the
 hex SHA-256 digest of the exact 16,384 RGBA bytes produced for this tile, with no
 metadata included in the digest.
 
+The reference C kernel starts `z` at `(0, 0)` for each pixel and repeatedly
+computes `z = z*z + c` while the iteration count is below `maxIter` and
+`|z|^2 <= 4`. The count increments after each update. Pixels reaching
+`maxIter` are black. For an escaping pixel, calculate the integer
+`shade = 32 + floor(iter * 223 / maxIter)`, then write
+`R = shade`, `G = (shade * 3) mod 256`, and
+`B = 255 - floor(shade / 2)`. Alpha is always 255. These exact rules make the
+benchmark output reproducible for implementations using the same floating-point
+operations.
+
 ## Binary frame common rules
 
 Byte 0 is the frame type (`0x01` TASK, `0x02` RESULT). Byte 1 is reserved: the

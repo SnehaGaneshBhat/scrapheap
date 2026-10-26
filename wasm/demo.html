@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Scrap Heap Mandelbrot WASM check</title>
+    <style>
+      body { color: #e8edf2; background: #101820; font: 16px system-ui, sans-serif; margin: 2rem; }
+      canvas { display: block; width: min(90vw, 900px); height: auto; border: 1px solid #64748b; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Full resolution Mandelbrot WASM render</h1>
+    <p>The renderer computes 1,024 separate 64×64 tiles and assembles a 2048×2048 image.</p>
+    <p><button id="download" disabled>Download PNG</button></p>
+    <canvas id="image" width="2048" height="2048"></canvas>
+    <pre id="status">Loading compiled WASM…</pre>
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>
