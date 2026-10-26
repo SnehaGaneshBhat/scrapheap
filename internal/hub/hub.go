@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -190,7 +191,14 @@ func (h *Hub) job(w http.ResponseWriter, _ *http.Request) {
 			best = &result
 		}
 	}
-	writeJSON(w, http.StatusOK, proto.JobSnapshot{JobID: h.cfg.JobID, State: s.State, Total: s.Total, Done: s.Done, InFlight: s.InFlight, Requeued: s.Requeued, ElapsedSec: s.Elapsed.Seconds(), ETASec: s.ETA.Seconds(), Workers: workers, Leaderboard: leaderboard, Verify: proto.VerifyStats{Sampled: s.Verify.Sampled, Matched: s.Verify.Matched, Mismatched: s.Verify.Mismatched}, Baseline: proto.BaselineInfo{Label: "1 laptop, all threads"}, Best: best})
+	// Estimate single-laptop time: total work seconds ÷ best thread count seen.
+	// This represents "one laptop running all tasks with its full thread budget".
+	baseline := proto.BaselineInfo{Label: "1 laptop (estimated)"}
+	if s.TotalTaskSec > 0 && s.MaxThreads > 0 {
+		baseline.Seconds = s.TotalTaskSec / float64(s.MaxThreads)
+		baseline.Label = fmt.Sprintf("1 laptop · %d threads (estimated)", s.MaxThreads)
+	}
+	writeJSON(w, http.StatusOK, proto.JobSnapshot{JobID: h.cfg.JobID, State: s.State, Total: s.Total, Done: s.Done, InFlight: s.InFlight, Requeued: s.Requeued, ElapsedSec: s.Elapsed.Seconds(), ETASec: s.ETA.Seconds(), Workers: workers, Leaderboard: leaderboard, Verify: proto.VerifyStats{Sampled: s.Verify.Sampled, Matched: s.Verify.Matched, Mismatched: s.Verify.Mismatched}, Baseline: baseline, Best: best})
 }
 
 func (h *Hub) resultAPI(w http.ResponseWriter, _ *http.Request) {

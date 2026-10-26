@@ -96,15 +96,20 @@ type WorkerSnapshot struct {
 }
 
 type Snapshot struct {
-	State    string
-	Total    int
-	Done     int
-	InFlight int
-	Requeued int
-	Elapsed  time.Duration
-	ETA      time.Duration
-	Workers  []WorkerSnapshot
-	Verify   VerificationSnapshot
+	State        string
+	Total        int
+	Done         int
+	InFlight     int
+	Requeued     int
+	Elapsed      time.Duration
+	ETA          time.Duration
+	Workers      []WorkerSnapshot
+	Verify       VerificationSnapshot
+	// TotalTaskSec is the sum of every accepted result's reported duration.
+	// Dividing by MaxThreads gives a single-laptop sequential-time estimate.
+	TotalTaskSec float64
+	// MaxThreads is the highest thread count seen across all known workers.
+	MaxThreads   int
 }
 
 type VerificationSnapshot struct {
@@ -453,6 +458,10 @@ func (s *Scheduler) Snapshot(now time.Time) Snapshot {
 		if w.status == WorkerStatusActive || w.status == WorkerStatusRejoined {
 			active++
 			poolSpeed += speed
+		}
+		out.TotalTaskSec += w.completedSeconds
+		if w.info.Threads > out.MaxThreads {
+			out.MaxThreads = w.info.Threads
 		}
 		out.Workers = append(out.Workers, WorkerSnapshot{
 			ID: w.id, Name: w.name, Browser: w.info.Browser, Cores: w.info.Cores,

@@ -71,12 +71,20 @@
           <div id="workers-list" class="workers-list"><div class="empty-state worker-empty"><span class="empty-glyph waiting-glyph" aria-hidden="true">◌</span><strong>Waiting for browser workers to connect</strong><span>Open the worker link on another laptop to join.</span></div></div>
         </section>
 
-        <section class="panel leaderboard-panel">
-          <div class="panel-heading"><div><p class="eyebrow">SEARCH RESULTS</p><h2>Validation leaderboard</h2></div><span class="rank-tag">RANKED BY VALIDATION</span></div>
-          <div class="leaderboard-head"><span>RANK / CONFIGURATION</span><span>VAL. ACCURACY</span></div>
-          <div id="leaderboard-list" class="leaderboard-list"><div class="empty-state compact"><span class="empty-glyph">⌁</span><strong>No configurations yet</strong><span>Results will appear as tasks complete.</span></div></div>
-          <div id="best-config" class="best-config" hidden></div>
-        </section>
+        <div class="right-column">
+          <section class="panel device-leaderboard-panel">
+            <div class="panel-heading"><div><p class="eyebrow">LIVE DEVICE RANKINGS</p><h2>Who's doing the most work</h2></div><span class="rank-tag" id="device-lb-tag">RANKED BY TASKS</span></div>
+            <div class="device-lb-head"><span>RANK / DEVICE</span><span>TASKS</span><span>SPEED</span><span>SHARE</span></div>
+            <div id="device-leaderboard-list" class="device-leaderboard-list"><div class="empty-state compact"><span class="empty-glyph">◌</span><strong>No devices yet</strong><span>Rankings appear as tasks complete.</span></div></div>
+          </section>
+
+          <section class="panel leaderboard-panel">
+            <div class="panel-heading"><div><p class="eyebrow">SEARCH RESULTS</p><h2>Validation leaderboard</h2></div><span class="rank-tag">RANKED BY VALIDATION</span></div>
+            <div class="leaderboard-head"><span>RANK / CONFIGURATION</span><span>VAL. ACCURACY</span></div>
+            <div id="leaderboard-list" class="leaderboard-list"><div class="empty-state compact"><span class="empty-glyph">⌁</span><strong>No configurations yet</strong><span>Results will appear as tasks complete.</span></div></div>
+            <div id="best-config" class="best-config" hidden></div>
+          </section>
+        </div>
       </div>
 
       <div class="bottom-grid">
@@ -86,10 +94,10 @@
           <div class="verification-caption">Skipped count is not present in the current protocol snapshot.</div>
           <div class="verification-caption">Completed tasks re-run on a different worker</div>
         </section>
-        <section class="panel performance-panel">
-          <div class="panel-heading"><div><p class="eyebrow">MEASURED PERFORMANCE</p><h2>One laptop vs. the pool</h2></div><span class="rank-tag">SAME WORKLOAD</span></div>
-          <div class="comparison-grid"><div class="comparison-item"><span class="comparison-label">ONE LAPTOP · ALL BROWSER THREADS</span><strong id="baseline-time">—</strong><span id="baseline-name" class="comparison-detail">Awaiting measured baseline</span></div><div class="comparison-divider" aria-hidden="true">÷</div><div class="comparison-item"><span class="comparison-label">DISTRIBUTED POOL</span><strong id="pool-time">—</strong><span class="comparison-detail">Awaiting comparable measurement</span></div><div class="speedup-chip"><span>SPEEDUP</span><strong id="speedup-value">—</strong></div></div>
-          <p id="performance-note" class="panel-note">Runtime comparison appears when both measurements are available for the same workload.</p>
+        <section id="performance-panel" class="panel performance-panel" data-state="pending">
+          <div class="panel-heading"><div><p class="eyebrow">TIME SAVED</p><h2>One laptop vs. the pool</h2></div><span class="rank-tag">SAME WORKLOAD</span></div>
+          <div class="comparison-grid"><div class="comparison-item"><span class="comparison-label">ONE LAPTOP · ESTIMATED SEQUENTIAL</span><strong id="baseline-time">—</strong><span id="baseline-name" class="comparison-detail">Metrics appear when job completes</span></div><div class="comparison-divider" aria-hidden="true">÷</div><div class="comparison-item"><span class="comparison-label">DISTRIBUTED POOL</span><strong id="pool-time">—</strong><span id="pool-detail" class="comparison-detail">Actual elapsed time</span></div><div class="speedup-chip"><span>SPEEDUP</span><strong id="speedup-value">—</strong><span class="speedup-sub">TIME SAVED</span><strong id="time-saved-value" class="speedup-saved">—</strong></div></div>
+          <p id="performance-note" class="panel-note">Metrics will appear when the job completes.</p>
         </section>
       </div>
 

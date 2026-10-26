@@ -273,6 +273,47 @@
     animateLayout(before);
   }
 
+  const deviceRankOrder = [];
+  const MEDAL = ['🥇','🥈','🥉'];
+
+  function renderDeviceLeaderboard(workers) {
+    const list = $('device-leaderboard-list');
+    if (!Array.isArray(workers) || !workers.length) {
+      list.innerHTML = '<div class="empty-state compact"><span class="empty-glyph">◌</span><strong>No devices yet</strong><span>Rankings appear as tasks complete.</span></div>';
+      deviceRankOrder.length = 0;
+      return;
+    }
+    // Sort by tasksDone desc, then speed desc as tiebreaker
+    const sorted = workers
+      .filter(w => w && typeof w === 'object')
+      .map(w => ({...w, _tasks: count(w.tasksDone) ?? 0, _speed: number(w.speed) ?? 0}))
+      .sort((a, b) => b._tasks - a._tasks || b._speed - a._speed);
+    const totalTasks = sorted.reduce((s, w) => s + w._tasks, 0);
+    const maxSpeed = Math.max(0, ...sorted.map(w => w._speed));
+    // Detect rank changes for flash animation
+    const newOrder = sorted.map(w => safeText(w.id, '?'));
+    const rankChanged = new Set();
+    for (let i = 0; i < newOrder.length; i++) {
+      const prevIdx = deviceRankOrder.indexOf(newOrder[i]);
+      if (prevIdx !== -1 && prevIdx > i) rankChanged.add(newOrder[i]);
+    }
+    deviceRankOrder.length = 0; deviceRankOrder.push(...newOrder);
+    list.innerHTML = sorted.map((w, i) => {
+      const id = safeText(w.id, 'Unknown');
+      const share = totalTasks > 0 && w._tasks > 0 ? (w._tasks / totalTasks * 100) : 0;
+      const speedPct = maxSpeed > 0 && w._speed > 0 ? Math.min(100, w._speed / maxSpeed * 100) : 0;
+      const medal = MEDAL[i] ?? '';
+      const statusCls = w.status === 'lost' ? ' dlb-lost' : w.status === 'rejoined' ? ' dlb-rejoined' : '';
+      const flash = rankChanged.has(id) ? ' dlb-rank-up' : '';
+      return `<div class="dlb-row${statusCls}${flash}">
+        <div class="dlb-rank-cell"><span class="dlb-medal">${medal || String(i+1).padStart(2,'0')}</span><span class="dlb-name" title="${escapeHTML(id)}">${escapeHTML(id)}</span><span class="dlb-browser">${escapeHTML(safeText(w.browser,''))}</span></div>
+        <span class="dlb-tasks">${w._tasks}</span>
+        <div class="dlb-speed-cell"><span class="dlb-speed-val">${w._speed > 0 ? fmtDecimal(w._speed) : '—'}</span><div class="dlb-speed-track"><i class="dlb-speed-fill" style="width:${speedPct.toFixed(1)}%"></i></div></div>
+        <div class="dlb-share-cell"><span class="dlb-share-pct">${share > 0 ? share.toFixed(0)+'%' : '—'}</span><div class="dlb-share-track"><i class="dlb-share-fill" style="width:${share.toFixed(1)}%"></i></div></div>
+      </div>`;
+    }).join('');
+  }
+
   function renderLeaderboard(rows,best){
     const list=$('leaderboard-list');
     const sorted=Array.isArray(rows)?rows.filter(r=>r&&typeof r==='object'&&!Array.isArray(r)).slice().sort((a,b)=>(number(b.valAcc)??-Infinity)-(number(a.valAcc)??-Infinity)).slice(0,6):[];
@@ -310,12 +351,40 @@
     previousMismatches=mismatched;
   }
 
-  function renderPerformance(baseline){
-    const seconds=baseline&&typeof baseline==='object'?number(baseline.seconds):null;
-    $('baseline-time').textContent=seconds!==null&&seconds>0?fmtDuration(seconds):'—';
-    $('baseline-name').textContent=baseline&&typeof baseline==='object'?safeText(baseline.label,'One laptop, all browser threads'):'Awaiting measured baseline';
-    $('pool-time').textContent='—';$('speedup-value').textContent='—';
-    $('performance-note').textContent=seconds!==null&&seconds>0?'Single-laptop baseline received. Pool runtime is not in the proposed /api/job contract, so speedup is withheld.':'Runtime comparison appears when both measurements are available for the same workload.';
+  function renderPerformance(baseline, elapsedSec, state){
+    const panel=$('performance-panel');
+    if(state!=='done'){
+      // Keep panel in pending state — don't spoil the reveal
+      $('baseline-time').textContent='—';
+      $('baseline-name').textContent='Computing…';
+      $('pool-time').textContent='—';
+      $('pool-detail').textContent='Computing…';
+      $('speedup-value').textContent='—';
+      $('time-saved-value').textContent='—';
+      $('performance-note').textContent='Metrics will appear when the job completes.';
+      panel.dataset.state='pending';
+      return;
+    }
+    const bSec=baseline&&typeof baseline==='object'?number(baseline.seconds):null;
+    const pSec=number(elapsedSec);
+    const hasBaseline=bSec!==null&&bSec>0;
+    const hasPool=pSec!==null&&pSec>0;
+    panel.dataset.state=hasBaseline&&hasPool?'done':'pending';
+    $('baseline-time').textContent=hasBaseline?fmtDuration(bSec):'—';
+    $('baseline-name').textContent=baseline&&baseline.label?baseline.label:'1 laptop sequential estimate';
+    $('pool-time').textContent=hasPool?fmtDuration(pSec):'—';
+    $('pool-detail').textContent='Distributed pool · actual elapsed';
+    if(hasBaseline&&hasPool){
+      const speedup=bSec/pSec;
+      const saved=bSec-pSec;
+      $('speedup-value').textContent=`${speedup.toFixed(1)}×`;
+      $('time-saved-value').textContent=saved>0?fmtDuration(saved):'—';
+      $('performance-note').textContent=`The pool finished in ${fmtDuration(pSec)} vs. an estimated ${fmtDuration(bSec)} on one laptop — ${speedup.toFixed(1)}× faster, saving ${saved>0?fmtDuration(saved):'time'}.`;
+    } else {
+      $('speedup-value').textContent='—';
+      $('time-saved-value').textContent='—';
+      $('performance-note').textContent='Not enough data to compute speedup — tasks may not have reported timing.';
+    }
   }
 
   function renderSnapshot(job){
@@ -334,7 +403,7 @@
     $('progress-label').textContent=percent===null?'Progress unavailable':state==='done'?'All tasks complete':`${done} of ${total} tasks`;
     $('elapsed-time').textContent=fmtDuration(job.elapsedSec);$('eta-time').textContent=state==='done'?'0s':fmtDuration(job.etaSec);
     $('requeued-note').textContent=requeued>0?'Tasks returned after worker loss':'Returned to the queue';
-    renderWorkers(job.workers);renderLeaderboard(job.leaderboard,job.best);renderVerification(job.verify);renderPerformance(job.baseline);
+    renderWorkers(job.workers);renderDeviceLeaderboard(job.workers);renderLeaderboard(job.leaderboard,job.best);renderVerification(job.verify);renderPerformance(job.baseline,job.elapsedSec,state);
     $('last-updated').textContent=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date());
     setConnection('connected','Connected');
     if(state==='done'&&!finishedSnapshot){finishedSnapshot=true;renderFinalSummary(job);}
@@ -345,7 +414,9 @@
   function renderFinalSummary(job){
     const content=$('results-content'),best=job.best&&typeof job.best==='object'?job.best:null;
     $('results-panel').dataset.state='done';$('results-badge').textContent='JOB DONE';
-    content.innerHTML=`<div class="result-pending"><span class="result-mark">✓</span><div><strong>All ${escapeHTML(count(job.done)??'reported')} tasks complete</strong><span>${best?`Best validation accuracy: ${escapeHTML(fmtAccuracy(best.valAcc))}. `:''}The protocol does not define a held-out final-result schema yet.</span>${best?`<div class="result-config">${configChips(best.config)}</div>`:''}</div></div>`;
+    content.innerHTML=`<div class="result-pending"><span class="result-mark">✓</span><div><strong>All ${escapeHTML(count(job.done)??'reported')} tasks complete</strong><span>${best?`Best validation accuracy: ${escapeHTML(fmtAccuracy(best.valAcc))}. `:''}</span>${best?`<div class="result-config">${configChips(best.config)}</div>`:''}</div></div>`;
+    // Reveal the performance panel with a short stagger so it feels like a ceremony
+    setTimeout(()=>renderPerformance(job.baseline,job.elapsedSec,'done'),400);
   }
 
   function demoSequence(){
@@ -369,7 +440,7 @@
   let demoTimers=[];
   function startDemoSequence(){
     demoTimers.forEach(clearTimeout);demoTimers=[];stopped=false;finishedSnapshot=false;previousMismatches=0;
-    firstSnapshot=true;firstWorkerSnapshot=true;previousBestKey='';previousLeaderboardKeys=new Set();leaderboardSignature='';
+    firstSnapshot=true;firstWorkerSnapshot=true;previousBestKey='';previousLeaderboardKeys=new Set();leaderboardSignature='';deviceRankOrder.length=0;
     if(toastTimer)clearTimeout(toastTimer);$('event-toast').hidden=true;
     for(const [id,record] of workerRecords){clearTimeout(record.exitTimer);clearTimeout(record.enterTimer);clearTimeout(record.highlightTimer);forgetMetric(`worker:${id}:tasks`);}
     workerRecords.clear();$('workers-list').replaceChildren();emptyWorkerState=null;
