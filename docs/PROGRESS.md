@@ -1,1 +1,39 @@
 # Progress log
+
+## Scaffold and protocol (2026-10-26 10:26 Asia/Calcutta)
+- What was built: 2-5 bullets
+  - Initialized the Go 1.22 module and added a Windows-focused README with build, test, and run commands.
+  - Added typed JSON control-message handling for HELLO, BENCH_RESULT, REQUEST_TASK, HEARTBEAT, ACK, and JOB_DONE.
+  - Added fixed little-endian TASK and RESULT binary frame encoders/decoders with validation.
+  - Documented byte layouts and sample hex frames; added table-driven round-trip and malformed-input tests.
+- Files created/changed: list with one-line purpose each
+  - `go.mod` — declares module `github.com/scrap-heap/backend` with Go 1.22 minimum.
+  - `README.md` — project stub and Windows Go commands.
+  - `cmd/server/main.go` — placeholder entry point until the coordinator is implemented.
+  - `internal/proto/proto.go` — message types and JSON/binary encoding/decoding.
+  - `internal/proto/proto_test.go` — protocol round-trip, malformed-input, and validation tests.
+  - `docs/protocol.md` — worker-facing JSON and binary wire contract with hex examples.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces: exported types, function signatures, message formats, endpoints
+  - `MessageType`, constants `MessageHello`, `MessageBenchResult`, `MessageRequestTask`, `MessageHeartbeat`, `MessageAck`, `MessageJobDone`.
+  - `Message`, `Task`, and `Result` structs.
+  - `EncodeJSON(Message) ([]byte, error)` and `DecodeJSON([]byte) (Message, error)`.
+  - `EncodeTask(Task) ([]byte, error)`, `DecodeTask([]byte) (Task, error)`.
+  - `EncodeResult(Result) ([]byte, error)`, `DecodeResult([]byte) (Result, error)`.
+  - Binary frame types `0x01` TASK and `0x02` RESULT; fixed headers of 45 and 17 bytes respectively.
+- How to run/test: exact commands, and the actual results you saw (pass/fail counts)
+  - `go fmt ./...` — passed.
+  - `go build ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and all protocol tests passed (6 test functions, including 26 table cases).
+  - `go test ./... -race` — failed before test execution because `C:\MinGW\bin\gcc.exe` exited with Windows `Illegal System DLL Relocation`; ordinary tests passed without race instrumentation.
+  - Go commands used `GOMODCACHE=C:\Users\manav\.codex\visualizations\2026\10\26\01a1768c-21c4-7d50-b994-7960d5d3627a\gomodcache` because the default module cache directory denied writes.
+- Decisions & deviations from this spec, and why
+  - `computeMs` is encoded as uint32 little-endian milliseconds, making the result header 17 bytes total.
+  - Module path selected as `github.com/scrap-heap/backend` because no remote module path was available.
+  - The coordinator entry point only reports that the server is not implemented yet; HTTP/WebSocket work is outside this task.
+- Known issues / TODOs / things you were unsure about
+  - The coordinator entry point is a placeholder; HTTP/WebSocket service work remains.
+  - Race-instrumented tests remain unverified until the local GCC/Windows runtime issue is resolved.
+- What the next task depends on
+  - Server work can now use the protocol package; browser implementation should follow `docs/protocol.md`.
