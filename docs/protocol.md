@@ -172,7 +172,7 @@ Result:
 
 `iters` is a non-negative integer. Starting from `h = 14695981039346656037`, for each integer `i` from `0` to `iters - 1`, update `h = ((h XOR i) * 1099511628211) mod 2^64`. The unsigned 64-bit result is encoded as a decimal JSON string. The browser worker uses `BigInt` for the same recurrence.
 
-The browser worker runs this test workload in JavaScript inside Web Workers so the full pull/lease/recovery path can be exercised before the MNIST trainer ABI is ready. This does not send code from the coordinator: the executor is built into the worker page. `mnist` assignments are reported as unsupported by this worker version and are left for lease recovery; use `burn` until the trainer and dataset loader are integrated.
+The browser worker runs this test workload in JavaScript inside Web Workers so the full pull/lease/recovery path can be exercised. This does not send code from the coordinator: the executor is built into the worker page.
 
 ### `mnist`
 
@@ -198,7 +198,14 @@ Result:
 }
 ```
 
-The MNIST payload and result are proposals pending P2 sign-off.
+The browser worker passes the payload as JSON to the built-in Go WASM trainer. The trainer uses the first 50,000 records from the MNIST training set for training and the remaining 10,000 for validation. The test set is not downloaded by the worker executor.
+
+The trainer ABI is exposed in the worker global scope:
+
+- `scrapHeapLoadDataset(trainImages, trainLabels)` accepts the two manifest-verified training IDX files as `Uint8Array` values. Each file may be raw IDX or gzip-compressed IDX. It returns a JSON string: success is `{"ready":true}`; failure is `{"error":"..."}`.
+- `scrapHeapTrain(configJSON)` accepts the task payload serialized as JSON and returns a JSON string matching the result schema above. Failure is `{"error":"..."}`.
+
+The dataset is loaded once per worker thread. The worker runs one trainer thread per browser tab to limit memory use. Each assignment trains independently and returns validation accuracy, validation loss, and elapsed training time. The executor and trainer are fixed assets served by the coordinator; executable code is never sent in a task.
 
 ## Sampled verification
 
@@ -274,7 +281,11 @@ Serves the live dashboard. It polls `GET /api/job` and starts the job through `P
 
 ### `GET /trainer.wasm`
 
-Serves the compiled WebAssembly trainer. Its exported function and memory ABI are owned by the trainer team and are not defined by this HTTP protocol.
+Serves the compiled Go WebAssembly trainer. Build it and the matching Go runtime shim with `sh scripts/build-wasm.sh`.
+
+### `GET /wasm_exec.js`
+
+Serves the Go runtime shim built from the same installed Go toolchain as `trainer.wasm`.
 
 ### `GET /dataset/<file>`
 

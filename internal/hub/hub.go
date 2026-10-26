@@ -81,6 +81,7 @@ func New(cfg Config) (*Hub, error) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /dataset/", h.datasetFile)
 	mux.HandleFunc("GET /trainer.wasm", h.staticFile("trainer.wasm"))
+	mux.HandleFunc("GET /wasm_exec.js", h.staticFile("wasm_exec.js"))
 	mux.HandleFunc("GET /worker", h.staticFile(filepath.Join("worker", "index.html")))
 	mux.HandleFunc("GET /worker/", h.workerFile)
 	mux.HandleFunc("GET /dashboard/", h.dashboardFile)
