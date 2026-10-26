@@ -1,0 +1,1 @@
+{"workerId":"worker-01","leaseSec":30,"heartbeatSec":10,"jobKind":"mnist","rejoined":false,"dataset":[{"file":"train-images-idx3-ubyte.gz","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":9912422}]}
