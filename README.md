@@ -1,6 +1,6 @@
 # Scrap Heap
 
-Scrap Heap is a Go coordinator for independent tasks shared across laptops. The browser worker page can execute the deterministic burn workload. The MNIST WASM trainer and its ABI are not implemented yet.
+Scrap Heap is a Go coordinator for independent tasks shared across laptops. Browser workers execute the deterministic burn workload or train the built-in MNIST model with Go WebAssembly.
 
 ## Requirements
 
@@ -8,7 +8,20 @@ Scrap Heap is a Go coordinator for independent tasks shared across laptops. The 
 
 ## Run the coordinator
 
-Build the repository:
+To use the MNIST search with the raw files in the downloaded Kaggle archive, leave the four top-level IDX files in `archive/`. The browser worker also accepts these gzip files in `data/`:
+
+- `train-images-idx3-ubyte.gz`
+- `train-labels-idx1-ubyte.gz`
+- `t10k-images-idx3-ubyte.gz`
+- `t10k-labels-idx1-ubyte.gz`
+
+Build the trainer WASM and matching runtime shim:
+
+```sh
+sh scripts/build-wasm.sh
+```
+
+Build the Go server:
 
 ```sh
 go build ./...
@@ -55,9 +68,9 @@ curl -sS -H 'Content-Type: application/json' \
   http://127.0.0.1:8080/w/pull
 ```
 
-The browser page runs `burn` tasks. `mnist` tasks remain unsupported until the trainer WASM ABI and dataset loader are defined. A `curl` pull only reserves a task; do not treat it as completed until a worker has run its executor and returned the result.
+The browser page runs `burn` tasks by default. For the raw files in `archive/`, start the MNIST search with `go run ./cmd/server -job search -data archive -addr :8080` after building the trainer. For gzip files in `data/`, use the default data directory instead. Each MNIST worker tab uses one trainer thread to limit memory use. A `curl` pull only reserves a task; do not treat it as completed until a worker has run its executor and returned the result.
 
-The coordinator also has a preconfigured `search` job source and validation leaderboard. Do not start it until the MNIST WASM trainer is integrated; the current browser worker cannot execute `mnist` tasks yet. See [implementation decisions](docs/implementation.md) for the initial grid and verification tolerances.
+The coordinator's search source produces a validation leaderboard. The held-back test set is not downloaded by the browser worker. See [implementation decisions](docs/implementation.md) for the initial grid and verification tolerances.
 
 ## Checks
 

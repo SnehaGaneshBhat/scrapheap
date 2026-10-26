@@ -48,11 +48,11 @@ async function postJSON(path, body) {
   return content;
 }
 
-async function register() {
+async function register(threads = workers.length || Number(threadInput.value)) {
   const reply = await postJSON("/w/hello", {
     name: workerName,
     cores: hardwareThreads,
-    threads: workers.length || Number(threadInput.value),
+    threads,
     browser: navigator.userAgent,
   });
   workerID = reply.workerId;
@@ -104,11 +104,33 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   try {
-    const hello = await register();
+    let hello = await register(threadCount);
+    let activeThreadCount = threadCount;
+    let mnistFiles = [];
+    if (hello.jobKind === "mnist") {
+      const available = new Set((hello.dataset || []).map((item) => item.file));
+      const candidates = [
+        ["train-images-idx3-ubyte.gz", "train-images.idx3-ubyte"],
+        ["train-labels-idx1-ubyte.gz", "train-labels.idx1-ubyte"],
+      ];
+      mnistFiles = candidates.map((options) => options.find((file) => available.has(file)));
+      if (mnistFiles.some((file) => !file)) {
+        throw new Error("Coordinator needs train-images and train-labels in raw IDX or gzip IDX format.");
+      }
+      if (activeThreadCount > 1) {
+        activeThreadCount = 1;
+        threadInput.value = "1";
+        hello = await register(activeThreadCount);
+        setStatus("MNIST uses one trainer per tab to limit memory use. Preparing the verified dataset...");
+      }
+    }
     heartbeatTimer = setInterval(sendHeartbeat, heartbeatMs / 2);
-    await ScrapHeapDataset.prepareManifest(hello.dataset || [], setStatus);
+    const workerDataset = hello.jobKind === "mnist"
+      ? (hello.dataset || []).filter((item) => item.file.startsWith("train-"))
+      : (hello.dataset || []);
+    await ScrapHeapDataset.prepareManifest(workerDataset, setStatus);
     note(hello.rejoined ? "Rejoined the coordinator." : "Joined the coordinator.");
-    for (let index = 0; index < threadCount; index++) {
+    for (let index = 0; index < activeThreadCount; index++) {
       const worker = new Worker("/worker/thread.js");
       worker.onmessage = ({ data }) => {
         if (data.type === "task-started") {
@@ -131,7 +153,7 @@ form.addEventListener("submit", async (event) => {
         note(`Thread ${index + 1} error: ${error.message}`);
       };
       workers.push(worker);
-      worker.postMessage({ type: "start", workerID });
+      worker.postMessage({ type: "start", workerID, mnistFiles });
     }
     joinButton.textContent = "Leave job";
     joinButton.disabled = false;

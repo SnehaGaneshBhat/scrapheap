@@ -3,3 +3,4 @@
 /scrapheap-worker
 *.exe
 data/
+/archive/
