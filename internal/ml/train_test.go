@@ -110,6 +110,33 @@ func TestTrainRealMNISTSubset(t *testing.T) {
 	}
 }
 
+func TestTrainRealMNISTCalibration(t *testing.T) {
+	if os.Getenv("MNIST_CALIBRATION") != "1" {
+		t.Skip("set MNIST_CALIBRATION=1 to run the full 5-epoch MNIST calibration")
+	}
+	dir := os.Getenv("MNIST_DIR")
+	if dir == "" {
+		dir = filepath.Join("..", "..", "data")
+	}
+	if _, err := os.Stat(filepath.Join(dir, trainImagesFile)); os.IsNotExist(err) {
+		t.Skip("MNIST dataset absent; set MNIST_DIR or place the verified files in data/")
+	}
+
+	data, err := LoadData(dir)
+	if err != nil {
+		t.Fatalf("LoadData(%q): %v", dir, err)
+	}
+	result, err := Train(Config{Hidden: 128, LR: 0.1, Epochs: 5, Batch: 64, Seed: 12345}, data)
+	if err != nil {
+		t.Fatalf("Train full MNIST calibration: %v", err)
+	}
+	t.Logf("full MNIST validation accuracy=%.6f loss=%.6f training_seconds=%.3f",
+		result.ValAcc, result.ValLoss, result.TrainSec)
+	if result.ValAcc < 0.95 || result.ValAcc > 1 || result.ValLoss < 0 {
+		t.Fatalf("invalid full MNIST metrics: %#v", result)
+	}
+}
+
 func binarySyntheticData(perClass, validationPerClass int) *Data {
 	data := &Data{}
 	for class := 0; class < 2; class++ {
