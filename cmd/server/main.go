@@ -30,6 +30,7 @@ func main() {
 	verifyLossTolerance := flag.Float64("verify-loss-tolerance", 0.02, "MNIST verification tolerance for validation loss")
 	webDir := flag.String("web", "web", "static web files directory")
 	dataDir := flag.String("data", "data", "dataset files directory")
+	journalPath := flag.String("journal", "", "path to journal file for resuming an interrupted search (empty = disabled)")
 	flag.Parse()
 	if (*job != proto.TaskKindBurn && *job != "search") || *tasks < 1 || *iters < 0 || *leaseSec < 1 || *heartbeatSec < 1 || *heartbeatSec >= *leaseSec || *verifyRate < 0 || *verifyRate > 1 || *verifyAccTolerance < 0 || *verifyLossTolerance < 0 {
 		log.Fatal("unsupported job or invalid task counts, durations, verification rate, or tolerance")
@@ -53,12 +54,24 @@ func main() {
 		source = work
 		verifier = sched.SampleVerifierFunc(matchesBurnResult)
 	case "search":
-		source = hub.NewSearchSource(hub.InitialSearchSpace())
 		sr := hub.NewSearchResults()
-		reducer = sr
 		resultsIface = sr
 		verifier = hub.MNISTVerifier{AccuracyTolerance: *verifyAccTolerance, LossTolerance: *verifyLossTolerance}
 		jobID, jobKind = "mnist-search-01", proto.TaskKindMnist
+		allTasks := hub.NewSearchSource(hub.InitialSearchSpace()).Tasks()
+		if *journalPath != "" {
+			remaining := replayJournal(*journalPath, allTasks, sr)
+			log.Printf("journal: replayed %d/%d tasks, %d remaining", len(allTasks)-len(remaining), len(allTasks), len(remaining))
+			f, err := os.OpenFile(*journalPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err != nil {
+				log.Fatal(err)
+			}
+			source = taskList(remaining)
+			reducer = &journalReducer{next: sr, file: f}
+		} else {
+			source = taskList(allTasks)
+			reducer = sr
+		}
 	}
 	s := sched.New(sched.Config{LeaseDur: lease, HeartbeatTimeout: heartbeat, VerifyRate: *verifyRate, Verifier: verifier}, source, reducer)
 	service, err := hub.New(hub.Config{Scheduler: s, Results: resultsIface, JobID: jobID, JobKind: jobKind, LeaseDuration: lease, HeartbeatInterval: heartbeat, WebDir: *webDir, DatasetDir: *dataDir, Logger: log.New(os.Stdout, "", 0)})
