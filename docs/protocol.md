@@ -10,7 +10,7 @@ All worker calls are `POST` requests with a JSON object body and a JSON object r
 
 Registers a worker or reconnects a worker identified by its name.
 
-Request fields: `name`, `cpu`, `cores`, `threads`, `os`, and `version` are strings except `cores` and `threads`, which are integers.
+Request fields: `name`, `cpu`, `os`, and `version` are strings. `cores` and `threads` are optional integers, and `browser` is an optional string. Older hello requests without `browser`, `cores`, or `threads` remain valid.
 
 ```json
 {
@@ -19,7 +19,8 @@ Request fields: `name`, `cpu`, `cores`, `threads`, `os`, and `version` are strin
   "cores": 14,
   "threads": 20,
   "os": "windows/amd64",
-  "version": "dev"
+  "version": "dev",
+  "browser": "Chrome"
 }
 ```
 
@@ -204,7 +205,7 @@ The MNIST payload and result are proposals pending P2 sign-off.
 
 ### `GET /api/job`
 
-Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, `mismatched`, `skipped`, `pending`, and `mismatches`. Each mismatch has `taskId`, `originalWorker`, `verifierWorker`, `original`, and `rerun`; the result fields contain opaque JSON values. `sampled = matched + mismatched + skipped + pending`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
+Returns a live job snapshot. The object has exactly these top-level fields: `jobId`, `state`, `total`, `done`, `inFlight`, `requeued`, `elapsedSec`, `etaSec`, `workers`, `leaderboard`, `verify`, `baseline`, and `best`. `state` is `waiting`, `running`, or `done`. `workers` entries have `id`, `cpu`, `cores`, `threads`, `browser`, `tasksDone`, `speed`, and `status`; worker `status` is `active`, `lost`, or `rejoined`. `leaderboard` entries have `config` and `valAcc`. `verify` has `sampled`, `matched`, `mismatched`, `skipped`, `pending`, and `mismatches`. Each mismatch has `taskId`, `originalWorker`, `verifierWorker`, `original`, and `rerun`; the result fields contain opaque JSON values. `sampled = matched + mismatched + skipped + pending`. `baseline` has `seconds` and `label`. `best` has `config` and `valAcc`. Counts are integers; elapsed/ETA, speed, baseline seconds, and accuracy are JSON numbers; `jobId`, CPU, and label are strings; config values are JSON objects.
 
 ```json
 {
@@ -222,6 +223,7 @@ Returns a live job snapshot. The object has exactly these top-level fields: `job
       "cpu": "Intel Core i7-12700H",
       "cores": 14,
       "threads": 20,
+      "browser": "Chrome",
       "tasksDone": 10,
       "speed": 0.083,
       "status": "active"
@@ -271,17 +273,31 @@ The design specifies that this endpoint returns the final result, but does not d
 
 Starts the job by transitioning state from `waiting` to `running`. No request body or response body/status is specified in this design. The transition is the endpoint's defined effect.
 
-### `GET /dataset/<file>`
+### Browser and static routes
 
-Serves the named dataset file from the coordinator. The response body is the file's raw bytes, not JSON. Dataset transfer encoding/content type is not specified here.
+These routes are all `GET` requests. The server accepts `-web <folder>` (default `./web`) and `-data <folder>` (default `./data`). Lease flags are `-lease-sec` (default 6) and `-heartbeat-sec` (default 2). If either configured folder is empty or missing, the server still starts and its file routes return `404`. Static routes do not expose directory listings and reject traversal paths. `/`, `/worker`, `/dashboard/...`, `/worker/...`, and `/trainer.wasm` send `Cache-Control: no-cache`.
 
-### `GET /healthz`
+| Route | File or response |
+| --- | --- |
+| `/healthz` | HTTP `200`, plain text `ok` |
+| `/` | `<web>/dashboard/index.html` |
+| `/dashboard/<file>` | `<web>/dashboard/<file>` |
+| `/worker` | `<web>/worker/index.html` |
+| `/worker/<file>` | `<web>/worker/<file>` |
+| `/trainer.wasm` | `<web>/trainer.wasm`, with `Content-Type: application/wasm` |
+| `/dataset/<file>` | `<data>/<file>` raw bytes |
+| `/dataset/manifest.json` | Startup-computed dataset manifest |
 
-Returns the text `ok` (plain text, not JSON).
+The manifest includes every regular file recursively under `<data>`, sorted by its relative name. `sha256` is the lowercase hexadecimal SHA-256 digest of the file bytes; `size` is the byte length.
 
-### `GET /`
-
-Serves the static frontend from `web/`. The response is frontend content, not a JSON API response.
+```json
+{
+  "files": [
+    {"name": "mnist/train-images.gz", "size": 9912422, "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+    {"name": "mnist/train-labels.gz", "size": 28881, "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}
+  ]
+}
+```
 
 ## Semantics
 

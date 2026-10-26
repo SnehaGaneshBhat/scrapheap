@@ -27,10 +27,11 @@ const (
 type HelloRequest struct {
 	Name    string `json:"name"`
 	CPU     string `json:"cpu"`
-	Cores   int    `json:"cores"`
-	Threads int    `json:"threads"`
+	Cores   int    `json:"cores,omitempty"`
+	Threads int    `json:"threads,omitempty"`
 	OS      string `json:"os"`
 	Version string `json:"version"`
+	Browser string `json:"browser,omitempty"`
 }
 
 type DatasetFile struct {

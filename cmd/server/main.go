@@ -29,7 +29,9 @@ func run() int {
 	verifyRate := flag.Float64("verify-rate", 0, "deterministic sampled verification rate")
 	verifySeed := flag.Uint64("verify-seed", 1, "verification sampling seed")
 	verifyTimeoutSec := flag.Int("verify-timeout-sec", 30, "time a queued verification may wait before being skipped")
-	leaseSec := flag.Int("leasesec", 6, "task lease duration in seconds")
+	leaseSecValue := 6
+	flag.IntVar(&leaseSecValue, "lease-sec", 6, "task lease duration in seconds")
+	flag.IntVar(&leaseSecValue, "leasesec", 6, "task lease duration in seconds (legacy spelling)")
 	heartbeatSec := flag.Int("heartbeat-sec", 2, "worker heartbeat interval in seconds")
 	dataDir := flag.String("data", "./data", "dataset directory")
 	webDir := flag.String("web", "./web", "static frontend directory")
@@ -47,7 +49,7 @@ func run() int {
 
 	tasks := burn.NewSource(*burnTasks, *burnIters)
 	reducer := burn.NewReducer(*burnIters)
-	leaseDuration := time.Duration(*leaseSec) * time.Second
+	leaseDuration := time.Duration(leaseSecValue) * time.Second
 	scheduler := sched.New(sched.Config{
 		LeaseDur:         leaseDuration,
 		HeartbeatTimeout: leaseDuration,
@@ -59,7 +61,7 @@ func run() int {
 	serverHub := hub.New(scheduler, hub.Config{
 		JobID:        "burn-search",
 		JobKind:      proto.TaskKindBurn,
-		LeaseSec:     *leaseSec,
+		LeaseSec:     leaseSecValue,
 		HeartbeatSec: *heartbeatSec,
 		DataDir:      *dataDir,
 		WebDir:       *webDir,

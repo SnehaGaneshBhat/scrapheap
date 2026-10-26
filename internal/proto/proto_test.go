@@ -13,7 +13,7 @@ func TestRoundTripMessages(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"hello request", HelloRequest{Name: "laptop-01", CPU: "Intel Core i7-12700H", Cores: 14, Threads: 20, OS: "windows/amd64", Version: "dev"}},
+		{"hello request", HelloRequest{Name: "laptop-01", CPU: "Intel Core i7-12700H", Cores: 14, Threads: 20, OS: "windows/amd64", Version: "dev", Browser: "Chrome"}},
 		{"hello response", HelloResponse{WorkerID: "worker-01", LeaseSec: 30, HeartbeatSec: 10, JobKind: TaskKindMnist, Dataset: []DatasetFile{{File: "train-images-idx3-ubyte.gz", SHA256: "abc", Size: 9912422}}}},
 		{"pull request", PullRequest{WorkerID: "worker-01"}},
 		{"task response", TaskResponse{Status: PullStatusTask, TaskID: "task-0001", Kind: TaskKindBurn, Payload: json.RawMessage(`{"iters":1000000}`), LeaseDeadlineUnixMs: 1793030400000, Attempt: 1}},

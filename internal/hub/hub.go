@@ -9,8 +9,11 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,15 +35,37 @@ type Config struct {
 }
 
 type Hub struct {
-	scheduler *sched.Scheduler
-	mu        sync.Mutex
-	clock     func() time.Time
-	config    Config
-	dataset   []proto.DatasetFile
-	web       http.Handler
-	data      http.Handler
-	logger    *log.Logger
-	runOnce   sync.Once
+	scheduler     *sched.Scheduler
+	mu            sync.Mutex
+	clock         func() time.Time
+	config        Config
+	dataset       []proto.DatasetFile
+	manifest      datasetManifest
+	browsers      map[string]string
+	dataAvailable bool
+	logger        *log.Logger
+	runOnce       sync.Once
+}
+
+type manifestFile struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type datasetManifest struct {
+	Files []manifestFile `json:"files"`
+}
+
+type jobWorkerResponse struct {
+	ID        string  `json:"id"`
+	CPU       string  `json:"cpu"`
+	Cores     int     `json:"cores"`
+	Threads   int     `json:"threads"`
+	Browser   string  `json:"browser"`
+	TasksDone int     `json:"tasksDone"`
+	Speed     float64 `json:"speed"`
+	Status    string  `json:"status"`
 }
 
 type jobSnapshotResponse struct {
@@ -52,7 +77,7 @@ type jobSnapshotResponse struct {
 	Requeued    int                      `json:"requeued"`
 	ElapsedSec  float64                  `json:"elapsedSec"`
 	ETASec      float64                  `json:"etaSec"`
-	Workers     []proto.WorkerInfo       `json:"workers"`
+	Workers     []jobWorkerResponse      `json:"workers"`
 	Leaderboard []proto.LeaderboardEntry `json:"leaderboard"`
 	Verify      verifySnapshotResponse   `json:"verify"`
 	Baseline    proto.BaselineInfo       `json:"baseline"`
@@ -77,6 +102,7 @@ type mismatchResponse struct {
 }
 
 func New(scheduler *sched.Scheduler, config Config) *Hub {
+	mime.AddExtensionType(".wasm", "application/wasm")
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
@@ -92,36 +118,60 @@ func New(scheduler *sched.Scheduler, config Config) *Hub {
 	if config.HeartbeatSec <= 0 {
 		config.HeartbeatSec = 2
 	}
-	if config.DataDir == "" {
-		config.DataDir = "./data"
-	}
-	if config.WebDir == "" {
-		config.WebDir = "./web"
+	dataset := listDataset(config.DataDir)
+	dataInfo, dataErr := os.Stat(config.DataDir)
+	manifest := datasetManifest{Files: make([]manifestFile, 0, len(dataset))}
+	for _, file := range dataset {
+		manifest.Files = append(manifest.Files, manifestFile{Name: file.File, Size: file.Size, SHA256: file.SHA256})
 	}
 	return &Hub{
-		scheduler: scheduler,
-		clock:     config.Clock,
-		config:    config,
-		dataset:   listDataset(config.DataDir),
-		web:       http.FileServer(http.Dir(config.WebDir)),
-		data:      http.StripPrefix("/dataset/", http.FileServer(http.Dir(config.DataDir))),
-		logger:    log.New(log.Writer(), "", 0),
+		scheduler:     scheduler,
+		clock:         config.Clock,
+		config:        config,
+		dataset:       dataset,
+		manifest:      manifest,
+		browsers:      make(map[string]string),
+		dataAvailable: dataErr == nil && dataInfo.IsDir(),
+		logger:        log.New(log.Writer(), "", 0),
 	}
 }
 
 func (h *Hub) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/w/hello", requireMethod(http.MethodPost, http.HandlerFunc(h.handleHello)))
-	mux.Handle("/w/pull", requireMethod(http.MethodPost, http.HandlerFunc(h.handlePull)))
-	mux.Handle("/w/result", requireMethod(http.MethodPost, http.HandlerFunc(h.handleResult)))
-	mux.Handle("/w/heartbeat", requireMethod(http.MethodPost, http.HandlerFunc(h.handleHeartbeat)))
-	mux.Handle("/api/job", requireMethod(http.MethodGet, http.HandlerFunc(h.handleJob)))
-	mux.Handle("/api/result", requireMethod(http.MethodGet, http.HandlerFunc(h.handleAPIResult)))
-	mux.Handle("/api/job/start", requireMethod(http.MethodPost, http.HandlerFunc(h.handleStart)))
-	mux.Handle("/healthz", requireMethod(http.MethodGet, http.HandlerFunc(h.handleHealth)))
-	mux.Handle("/dataset/", requireMethod(http.MethodGet, h.data))
-	mux.Handle("/", requireMethod(http.MethodGet, h.web))
-	return mux
+	routes := map[string]http.Handler{
+		"/w/hello":       requireMethod(http.MethodPost, http.HandlerFunc(h.handleHello)),
+		"/w/pull":        requireMethod(http.MethodPost, http.HandlerFunc(h.handlePull)),
+		"/w/result":      requireMethod(http.MethodPost, http.HandlerFunc(h.handleResult)),
+		"/w/heartbeat":   requireMethod(http.MethodPost, http.HandlerFunc(h.handleHeartbeat)),
+		"/api/job":       requireMethod(http.MethodGet, http.HandlerFunc(h.handleJob)),
+		"/api/result":    requireMethod(http.MethodGet, http.HandlerFunc(h.handleAPIResult)),
+		"/api/job/start": requireMethod(http.MethodPost, http.HandlerFunc(h.handleStart)),
+		"/healthz":       requireMethod(http.MethodGet, http.HandlerFunc(h.handleHealth)),
+		"/worker":        requireMethod(http.MethodGet, h.noCache(http.HandlerFunc(h.handleWorkerIndex))),
+		"/trainer.wasm":  requireMethod(http.MethodGet, h.noCache(http.HandlerFunc(h.handleTrainerWasm))),
+		"/":              requireMethod(http.MethodGet, h.noCache(http.HandlerFunc(h.handleWebRoot))),
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handler, ok := routes[r.URL.Path]; ok {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		var handler http.Handler
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/worker/"):
+			handler = requireMethod(http.MethodGet, h.noCache(http.HandlerFunc(h.handleWorkerFile)))
+		case strings.HasPrefix(r.URL.Path, "/dashboard/"):
+			handler = requireMethod(http.MethodGet, h.noCache(http.HandlerFunc(h.handleDashboardFile)))
+		case r.URL.Path == "/dataset/manifest.json":
+			handler = requireMethod(http.MethodGet, http.HandlerFunc(h.handleManifest))
+		case strings.HasPrefix(r.URL.Path, "/dataset/"):
+			handler = requireMethod(http.MethodGet, http.HandlerFunc(h.handleDatasetFile))
+		default:
+			http.NotFound(w, r)
+		}
+		if handler != nil {
+			handler.ServeHTTP(w, r)
+		}
+	})
 }
 
 func requireMethod(method string, next http.Handler) http.Handler {
@@ -175,6 +225,7 @@ func (h *Hub) handleHello(w http.ResponseWriter, r *http.Request) {
 	now := h.clock()
 	h.mu.Lock()
 	id, rejoined := h.scheduler.Hello(req.Name, sched.WorkerInfo{CPU: req.CPU, Cores: req.Cores, Threads: req.Threads}, now)
+	h.browsers[id] = req.Browser
 	events := h.scheduler.DrainEvents(now)
 	h.mu.Unlock()
 	h.logEvents(now, events)
@@ -240,14 +291,18 @@ func (h *Hub) handleJob(w http.ResponseWriter, r *http.Request) {
 	now := h.clock()
 	h.mu.Lock()
 	snapshot := h.scheduler.Snapshot(now)
+	browsers := make(map[string]string, len(h.browsers))
+	for id, browser := range h.browsers {
+		browsers[id] = browser
+	}
 	events := h.scheduler.DrainEvents(now)
 	h.mu.Unlock()
 	h.logEvents(now, events)
-	workers := make([]proto.WorkerInfo, 0, len(snapshot.Workers))
+	workers := make([]jobWorkerResponse, 0, len(snapshot.Workers))
 	for _, worker := range snapshot.Workers {
-		workers = append(workers, proto.WorkerInfo{
+		workers = append(workers, jobWorkerResponse{
 			ID: worker.ID, CPU: worker.CPU, Cores: worker.Cores, Threads: worker.Threads,
-			TasksDone: worker.TasksDone, Speed: worker.Speed, Status: worker.Status,
+			Browser: browsers[worker.ID], TasksDone: worker.TasksDone, Speed: worker.Speed, Status: worker.Status,
 		})
 	}
 	verify := verifySnapshotResponse{
@@ -289,6 +344,122 @@ func (h *Hub) handleStart(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok"))
+}
+
+func (h *Hub) handleWebRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	rel := "dashboard/index.html"
+	// Preserve the original root index for deployments not yet using dashboard/.
+	if h.config.WebDir != "" {
+		if _, err := os.Stat(filepath.Join(h.config.WebDir, filepath.FromSlash(rel))); errors.Is(err, os.ErrNotExist) {
+			if _, legacyErr := os.Stat(filepath.Join(h.config.WebDir, "index.html")); legacyErr == nil {
+				rel = "index.html"
+			}
+		}
+	}
+	h.serveFile(w, r, h.config.WebDir, rel, "")
+}
+
+func (h *Hub) handleWorkerIndex(w http.ResponseWriter, r *http.Request) {
+	h.serveFile(w, r, h.config.WebDir, "worker/index.html", "")
+}
+
+func (h *Hub) handleTrainerWasm(w http.ResponseWriter, r *http.Request) {
+	h.serveFile(w, r, h.config.WebDir, "trainer.wasm", "application/wasm")
+}
+
+func (h *Hub) handleWorkerFile(w http.ResponseWriter, r *http.Request) {
+	h.servePathFile(w, r, filepath.Join(h.config.WebDir, "worker"), "/worker/")
+}
+
+func (h *Hub) handleDashboardFile(w http.ResponseWriter, r *http.Request) {
+	h.servePathFile(w, r, filepath.Join(h.config.WebDir, "dashboard"), "/dashboard/")
+}
+
+func (h *Hub) handleDatasetFile(w http.ResponseWriter, r *http.Request) {
+	h.servePathFile(w, r, h.config.DataDir, "/dataset/")
+}
+
+func (h *Hub) handleManifest(w http.ResponseWriter, r *http.Request) {
+	if !h.dataAvailable {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.manifest)
+}
+
+func (h *Hub) servePathFile(w http.ResponseWriter, r *http.Request, root, prefix string) {
+	rel, ok := safeRelativeFile(strings.TrimPrefix(r.URL.EscapedPath(), prefix))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	h.serveResolvedFile(w, r, root, rel, "")
+}
+
+func (h *Hub) serveFile(w http.ResponseWriter, r *http.Request, root, name, contentType string) {
+	if root == "" {
+		http.NotFound(w, r)
+		return
+	}
+	rel, ok := safeRelativeFile(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	h.serveResolvedFile(w, r, root, rel, contentType)
+}
+
+func (h *Hub) serveResolvedFile(w http.ResponseWriter, r *http.Request, root, rel, contentType string) {
+	if root == "" {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := os.Open(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	if contentType == "" {
+		contentType = mime.TypeByExtension(filepath.Ext(rel))
+	}
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), file)
+}
+
+func (h *Hub) noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func safeRelativeFile(escaped string) (string, bool) {
+	decoded, err := url.PathUnescape(escaped)
+	if err != nil || decoded == "" || strings.Contains(decoded, `\`) || path.IsAbs(decoded) || filepath.IsAbs(decoded) {
+		return "", false
+	}
+	for _, segment := range strings.Split(decoded, "/") {
+		if segment == ".." {
+			return "", false
+		}
+	}
+	clean := path.Clean(decoded)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || !filepath.IsLocal(filepath.FromSlash(clean)) {
+		return "", false
+	}
+	return clean, true
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
