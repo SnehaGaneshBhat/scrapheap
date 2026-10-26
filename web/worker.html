@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Scrap Heap Worker</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #111; color: #eee; }
+    h1 { font-size: 22px; }
+    button { font-size: 20px; padding: 16px 24px; width: 100%; border: 0; border-radius: 12px; background: #2ecc71; color: #000; }
+    input { font-size: 18px; padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 12px; border: 0; border-radius: 12px; }
+    .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333; }
+    #status { margin: 12px 0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Scrap Heap: lend your device</h1>
+  <input id='label' maxlength='40' placeholder='Device name (optional), e.g. Pixel 7'>
+  <button id='join'>Tap to contribute</button>
+  <div id='stats' hidden>
+    <div id='status'>Starting...</div>
+    <div class='row'><span>Device</span><span id='dev'>-</span></div>
+    <div class='row'><span>Threads</span><span id='threads'>-</span></div>
+    <div class='row'><span>Bench score</span><span id='bench'>-</span></div>
+    <div class='row'><span>Tiles done</span><span id='done'>0</span></div>
+    <div class='row'><span>Tiles/sec (last 5 s)</span><span id='tps'>0</span></div>
+    <div class='row'><span>Avg tile time</span><span id='avg'>-</span></div>
+    <div class='row'><span>Slowest tile</span><span id='max'>-</span></div>
+    <div class='row'><span>Server ACKs</span><span id='acks'>0</span></div>
+    <p>Keep this screen on and in the foreground.</p>
+  </div>
+  <script src='protocol.js'></script>
+  <script src='NoSleep.min.js'></script>
+  <script src='worker.js'></script>
+</body>
+</html>
