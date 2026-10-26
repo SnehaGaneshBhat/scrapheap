@@ -20,9 +20,8 @@ threadInput.value = Math.max(1, hardwareThreads - 1);
 threadInput.max = hardwareThreads;
 
 let workerID = "";
-let heartbeatMs = 10000;
 let workers = [];
-let heartbeatTimer = 0;
+let heartbeatWorker = null;
 let joining = false;
 const running = new Map();
 
@@ -56,28 +55,15 @@ async function register() {
     browser: navigator.userAgent,
   });
   workerID = reply.workerId;
-  heartbeatMs = Math.max(1000, Number(reply.heartbeatSec) * 1000);
+  if (heartbeatWorker) heartbeatWorker.postMessage({ type: "worker-id", workerID });
   for (const worker of workers) worker.postMessage({ type: "worker-id", workerID });
   setStatus(`Connected as ${workerName} (${reply.jobKind}); ${workers.length || Number(threadInput.value)} thread(s).`);
   return reply;
 }
 
-async function sendHeartbeat() {
-  if (!workerID) return;
-  try {
-    const reply = await postJSON("/w/heartbeat", { workerId: workerID, running: [...running.values()] });
-    if (reply.unknownWorker) {
-      note("Coordinator restarted; registering again.");
-      await register();
-    }
-  } catch (error) {
-    setStatus(`Coordinator connection problem: ${error.message}`);
-  }
-}
-
 function stopWorkers() {
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = 0;
+  if (heartbeatWorker) heartbeatWorker.terminate();
+  heartbeatWorker = null;
   for (const worker of workers) worker.terminate();
   workers = [];
   running.clear();
@@ -105,20 +91,32 @@ form.addEventListener("submit", async (event) => {
   }
   try {
     const hello = await register();
-    heartbeatTimer = setInterval(sendHeartbeat, heartbeatMs / 2);
     await ScrapHeapDataset.prepareManifest(hello.dataset || [], setStatus);
     note(hello.rejoined ? "Rejoined the coordinator." : "Joined the coordinator.");
+    heartbeatWorker = new Worker("/worker/heartbeat.js");
+    heartbeatWorker.onmessage = async ({ data }) => {
+      if (data.type === "error") setStatus(`Coordinator connection problem: ${data.message}`);
+      if (data.type === "unknown-worker") {
+        note("Coordinator restarted; registering again.");
+        try { await register(); } catch (error) { setStatus(`Could not reconnect: ${error.message}`); }
+      }
+    };
+    heartbeatWorker.postMessage({ type: "worker-id", workerID });
     for (let index = 0; index < threadCount; index++) {
       const worker = new Worker("/worker/thread.js");
       worker.onmessage = ({ data }) => {
         if (data.type === "task-started") {
           running.set(index, data.taskId);
+          heartbeatWorker.postMessage({ type: "running", running: [...running.values()] });
+          setStatus(`Working on ${data.taskId}.`);
           note(`Thread ${index + 1} started ${data.taskId}.`);
         } else if (data.type === "task-finished") {
           running.delete(index);
+          heartbeatWorker.postMessage({ type: "running", running: [...running.values()] });
           note(`Thread ${index + 1} finished ${data.taskId} (${data.reason}).`);
         } else if (data.type === "task-abandoned") {
           running.delete(index);
+          heartbeatWorker.postMessage({ type: "running", running: [...running.values()] });
           note(`Thread ${index + 1} abandoned ${data.taskId}: ${data.reason}`);
         } else if (data.type === "status") {
           setStatus(data.message);
@@ -152,9 +150,11 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+window.setTimeout(() => form.requestSubmit(), 0);
+
 document.addEventListener("visibilitychange", () => {
   visibilityLine.textContent = document.hidden
-    ? "This tab is hidden. Bring it to the front to avoid browser throttling."
+    ? "Tab hidden: bring to front to avoid browser throttling."
     : "This tab is visible.";
 });
-visibilityLine.textContent = document.hidden ? "This tab is hidden." : "This tab is visible.";
+visibilityLine.textContent = document.hidden ? "Tab hidden: bring to front to avoid browser throttling." : "This tab is visible.";

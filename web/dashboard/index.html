@@ -3,96 +3,102 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scrap Heap dashboard</title>
-  <style>
-    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; --line: #8885; --panel: #8881; }
-    body { max-width: 76rem; margin: 2rem auto; padding: 0 1rem 3rem; }
-    header, .section-heading, .join-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-    h1, h2, h3, p { margin-top: 0; }
-    h1 { margin-bottom: .2rem; }
-    h2 { margin: 2rem 0 .7rem; font-size: 1.2rem; }
-    .muted { opacity: .72; }
-    button, a.button { padding: .55rem .85rem; border: 1px solid var(--line); border-radius: .4rem; font: inherit; text-decoration: none; cursor: pointer; }
-    button:disabled { cursor: default; opacity: .6; }
-    .pill { border: 1px solid var(--line); border-radius: 999px; padding: .25rem .7rem; white-space: nowrap; }
-    .pill.running { border-color: #d98b18; }
-    .pill.done { border-color: #368d51; }
-    .join-row { justify-content: flex-start; flex-wrap: wrap; margin: 1.3rem 0; padding: .8rem; border: 1px solid var(--line); border-radius: .5rem; }
-    .join-row code { overflow-wrap: anywhere; }
-    progress { width: 100%; height: 1.15rem; }
-    .metrics { display: grid; grid-template-columns: repeat(6, minmax(7rem, 1fr)); gap: .6rem; margin-top: .7rem; }
-    .metric, .panel, .worker { padding: .9rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); }
-    .metric strong { display: block; font-size: 1.25rem; }
-    .metric span { opacity: .75; font-size: .9rem; }
-    .two-col { display: grid; grid-template-columns: 2fr 1fr; gap: .8rem; }
-    #workers { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: .7rem; }
-    .worker h3 { margin-bottom: .2rem; }
-    .worker p { margin-bottom: .3rem; }
-    .worker.lost { border-color: #c44; }
-    .worker.active, .worker.rejoined { border-color: #398f54; }
-    ul { padding-left: 1.3rem; }
-    #error { color: #d55; min-height: 1.5em; }
-    @media (max-width: 58rem) { .metrics { grid-template-columns: repeat(3, 1fr); } .two-col { grid-template-columns: 1fr; } }
-    @media (max-width: 35rem) { header { align-items: flex-start; flex-direction: column; } .metrics { grid-template-columns: repeat(2, 1fr); } }
-  </style>
+  <meta name="color-scheme" content="dark">
+  <title>Scrap Heap — Compute Pool</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+  <script src="/dashboard/dashboard.js" defer></script>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Scrap Heap</h1>
-      <p class="muted">Live coordinator status</p>
-    </div>
-    <div class="section-heading">
-      <span id="job-state" class="pill">Connecting…</span>
-      <button id="start-job" type="button">Start job</button>
-    </div>
-  </header>
-
-  <div class="join-row">
-    <strong>Join this pool</strong>
-    <a id="worker-link" href="/worker">/worker</a>
-    <button id="copy-link" type="button">Copy link</button>
-  </div>
-
-  <p id="error" role="status" aria-live="polite"></p>
-  <progress id="progress" max="1" value="0" aria-label="Job progress"></progress>
-  <div class="metrics" aria-label="Job progress metrics">
-    <div class="metric"><strong id="done">—</strong><span>Tasks done</span></div>
-    <div class="metric"><strong id="in-flight">—</strong><span>In flight</span></div>
-    <div class="metric"><strong id="total">—</strong><span>Total</span></div>
-    <div class="metric"><strong id="requeued">—</strong><span>Requeued</span></div>
-    <div class="metric"><strong id="elapsed">—</strong><span>Elapsed</span></div>
-    <div class="metric"><strong id="eta">—</strong><span>Estimated remaining</span></div>
-  </div>
-
-  <h2>Laptops</h2>
-  <div id="workers" aria-live="polite"><p class="muted">Waiting for workers…</p></div>
-
-  <div class="two-col">
-    <section>
-      <h2>Validation leaderboard</h2>
-      <div class="panel"><p id="leaderboard" class="muted">No training results yet.</p></div>
-    </section>
-    <section>
-      <h2>Verification</h2>
-      <div class="panel">
-        <p><strong id="verify-summary">0 sampled</strong></p>
-        <p id="verify-detail" class="muted">0 matched · 0 mismatched</p>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Scrap Heap dashboard">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span><strong>scrap heap</strong><small>COMPUTE POOL</small></span>
+      </a>
+      <div class="topbar-right">
+        <span id="mode-badge" class="mode-badge" hidden>DEMO MODE</span>
+        <button id="replay-demo" class="demo-button" type="button" hidden>Replay demo</button>
+        <span id="connection" class="connection" data-state="connecting"><span class="connection-dot"></span><span id="connection-text">Connecting</span></span>
+        <span class="updated">UPDATED <time id="last-updated">—</time></span>
       </div>
-    </section>
-  </div>
+    </header>
 
-  <div class="two-col">
-    <section>
-      <h2>Best config so far</h2>
-      <div class="panel"><p id="best-config" class="muted">No best config yet.</p></div>
-    </section>
-    <section>
-      <h2>Baseline</h2>
-      <div class="panel"><p id="baseline" class="muted">Single-laptop time not measured.</p></div>
-    </section>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">DISTRIBUTED COMPUTE · LIVE MONITOR</p>
+          <h1>Scrap Heap<span class="title-period">.</span></h1>
+          <p class="hero-copy">Browser sessions share independent tasks across the laptops in the room.</p>
+        </div>
+        <div class="job-state-wrap">
+          <span class="state-caption">JOB STATUS</span>
+          <span id="job-state" class="state-pill" data-state="waiting"><span class="state-dot"></span><span>Waiting</span></span>
+          <span id="job-id" class="job-id">JOB —</span>
+          <button id="start-job" type="button">Start job</button>
+        </div>
+      </section>
+
+      <div id="api-alert" class="api-alert" role="status" hidden><span class="alert-icon">!</span><span id="api-alert-text">Coordinator unavailable. Retrying…</span></div>
+      <div id="event-toast" class="event-toast" role="status" aria-live="polite" hidden></div>
+
+      <section class="join-panel" aria-labelledby="join-title">
+        <div class="join-copy">
+          <p class="eyebrow">ZERO-INSTALL PARTICIPATION</p>
+          <h2 id="join-title">Join the pool</h2>
+          <p>Open this link on another laptop to contribute computing power.</p>
+          <div class="join-workflow" aria-label="How joining works"><span>1 Open link</span><i>›</i><span>2 Browser loads trainer + data</span><i>›</i><span>3 Threads start</span><i>›</i><span>4 Coordinator assigns tasks</span></div>
+        </div>
+        <div class="join-link-wrap">
+          <span class="join-link-label">BROWSER WORKER LINK</span>
+          <div class="join-link-row"><a id="worker-url" class="join-url" href="/worker">Loading coordinator address…</a><button id="copy-worker-link" class="copy-button" type="button">Copy link</button></div>
+          <span id="join-network-note" class="join-network-note">Share with devices that can reach this coordinator.</span>
+          <span id="copy-status" class="copy-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="join-pool-stats"><div><strong id="join-session-count">—</strong><span>CONNECTED SESSIONS</span></div><div><strong id="join-thread-count">—</strong><span>THREADS · CONNECTED SESSIONS</span></div></div>
+      </section>
+
+      <section class="metrics-grid" aria-label="Job overview">
+        <article class="metric-card metric-primary"><div class="metric-label">TASKS COMPLETE <span class="metric-icon">↗</span></div><div class="metric-value"><span id="done-count">—</span><span class="metric-total"> / <span id="total-count">—</span></span></div><div class="progress-track"><div id="progress-fill" class="progress-fill" style="width:0%"></div></div><div class="metric-foot"><span id="progress-label">Waiting for job data</span><span id="progress-percent">—</span></div></article>
+        <article class="metric-card"><div class="metric-label">IN FLIGHT</div><div id="inflight-count" class="metric-value">—</div><div class="metric-foot"><span class="metric-note">Tasks leased to workers</span></div></article>
+        <article class="metric-card"><div class="metric-label">REQUEUED</div><div id="requeued-count" class="metric-value">—</div><div class="metric-foot"><span id="requeued-note" class="metric-note">Returned to the queue</span></div></article>
+        <article class="metric-card"><div class="metric-label">ELAPSED</div><div id="elapsed-time" class="metric-value metric-time">—</div><div class="metric-foot"><span class="metric-note">EST. REMAINING</span><strong id="eta-time" class="metric-subvalue">—</strong></div></article>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel workers-panel">
+          <div class="panel-heading"><div><p class="eyebrow">BROWSER WORKERS</p><h2>Browser sessions <span id="worker-count" class="heading-count">—</span></h2></div><span id="worker-summary" class="panel-meta">Waiting for browser workers</span></div>
+          <div id="workers-list" class="workers-list"><div class="empty-state worker-empty"><span class="empty-glyph waiting-glyph" aria-hidden="true">◌</span><strong>Waiting for browser workers to connect</strong><span>Open the worker link on another laptop to join.</span></div></div>
+        </section>
+
+        <section class="panel leaderboard-panel">
+          <div class="panel-heading"><div><p class="eyebrow">SEARCH RESULTS</p><h2>Validation leaderboard</h2></div><span class="rank-tag">RANKED BY VALIDATION</span></div>
+          <div class="leaderboard-head"><span>RANK / CONFIGURATION</span><span>VAL. ACCURACY</span></div>
+          <div id="leaderboard-list" class="leaderboard-list"><div class="empty-state compact"><span class="empty-glyph">⌁</span><strong>No configurations yet</strong><span>Results will appear as tasks complete.</span></div></div>
+          <div id="best-config" class="best-config" hidden></div>
+        </section>
+      </div>
+
+      <div class="bottom-grid">
+        <section id="verification-panel" class="panel verification-panel" data-state="pending">
+          <div class="panel-heading"><div><p class="eyebrow">INTEGRITY CHECK</p><h2>Sample verification</h2></div><span id="verification-state" class="verification-badge" data-state="pending"><span class="state-dot"></span>Pending</span></div>
+          <div id="verification-content" class="verification-content"><span class="verification-placeholder">Pending · no samples reported yet</span></div>
+          <div class="verification-caption">Skipped count is not present in the current protocol snapshot.</div>
+          <div class="verification-caption">Completed tasks re-run on a different worker</div>
+        </section>
+        <section class="panel performance-panel">
+          <div class="panel-heading"><div><p class="eyebrow">MEASURED PERFORMANCE</p><h2>One laptop vs. the pool</h2></div><span class="rank-tag">SAME WORKLOAD</span></div>
+          <div class="comparison-grid"><div class="comparison-item"><span class="comparison-label">ONE LAPTOP · ALL BROWSER THREADS</span><strong id="baseline-time">—</strong><span id="baseline-name" class="comparison-detail">Awaiting measured baseline</span></div><div class="comparison-divider" aria-hidden="true">÷</div><div class="comparison-item"><span class="comparison-label">DISTRIBUTED POOL</span><strong id="pool-time">—</strong><span class="comparison-detail">Awaiting comparable measurement</span></div><div class="speedup-chip"><span>SPEEDUP</span><strong id="speedup-value">—</strong></div></div>
+          <p id="performance-note" class="panel-note">Runtime comparison appears when both measurements are available for the same workload.</p>
+        </section>
+      </div>
+
+      <section id="results-panel" class="panel results-panel" data-state="pending">
+        <div class="panel-heading"><div><p class="eyebrow">JOB FINISH</p><h2>Final results</h2></div><span id="results-badge" class="result-badge">NOT READY</span></div>
+        <div id="results-content" class="results-content"><div class="result-pending"><span class="result-mark">↗</span><div><strong>Final score appears when the job is done</strong><span>Held-out test accuracy is reported once for the winning configuration.</span></div></div></div>
+      </section>
+
+      <footer class="footer"><span>SCRAP HEAP <span class="footer-sep">/</span> TASK PARALLELISM FOR THE MACHINES YOU HAVE</span><span id="poll-indicator">LIVE SNAPSHOT · 2S REFRESH</span></footer>
+    </main>
   </div>
-  <p class="muted">Updates every 1.5 seconds. A browser tab must stay open while its worker threads are running.</p>
-  <script src="/dashboard/dashboard.js" defer></script>
 </body>
 </html>
