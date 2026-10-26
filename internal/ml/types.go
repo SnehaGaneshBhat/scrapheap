@@ -1,0 +1,66 @@
+package ml
+
+import "errors"
+
+// Config is an MNIST training configuration. JSON names match the pending
+// MNIST payload proposal in docs/protocol.md.
+type Config struct {
+	Hidden int     `json:"hidden"`
+	LR     float64 `json:"lr"`
+	Epochs int     `json:"epochs"`
+	Batch  int     `json:"batch"`
+	Seed   int     `json:"seed"`
+}
+
+// Result contains validation-only metrics from a training run.
+type Result struct {
+	ValAcc   float64 `json:"valAcc"`
+	ValLoss  float64 `json:"valLoss"`
+	TrainSec float64 `json:"trainSec"`
+}
+
+// TestResult contains the final test-set metric. It is reserved for final
+// winner evaluation and is not returned by Train.
+type TestResult struct {
+	TestAcc float64 `json:"testAcc"`
+}
+
+// Example is one normalized MNIST image and its digit label.
+type Example struct {
+	Pixels []float64
+	Label  uint8
+}
+
+// Data holds the fixed train, validation, and held-back test sets.
+type Data struct {
+	Train      []Example
+	Validation []Example
+	Test       []Example
+}
+
+// ErrorKind identifies a package-level failure category.
+type ErrorKind string
+
+const (
+	ErrorKindNotImplemented ErrorKind = "not_implemented"
+)
+
+// Error describes an operation failure in this package.
+type Error struct {
+	Op   string
+	Kind ErrorKind
+	Err  error
+}
+
+func (e *Error) Error() string {
+	if e.Err != nil {
+		return e.Op + ": " + e.Err.Error()
+	}
+	return e.Op + ": " + string(e.Kind)
+}
+
+func (e *Error) Unwrap() error {
+	return e.Err
+}
+
+var errNotImplemented = errors.New("not implemented")
