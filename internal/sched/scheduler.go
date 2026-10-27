@@ -96,20 +96,20 @@ type WorkerSnapshot struct {
 }
 
 type Snapshot struct {
-	State        string
-	Total        int
-	Done         int
-	InFlight     int
-	Requeued     int
-	Elapsed      time.Duration
-	ETA          time.Duration
-	Workers      []WorkerSnapshot
-	Verify       VerificationSnapshot
+	State    string
+	Total    int
+	Done     int
+	InFlight int
+	Requeued int
+	Elapsed  time.Duration
+	ETA      time.Duration
+	Workers  []WorkerSnapshot
+	Verify   VerificationSnapshot
 	// TotalTaskSec is the sum of every accepted result's reported duration.
 	// Dividing by MaxThreads gives a single-laptop sequential-time estimate.
 	TotalTaskSec float64
 	// MaxThreads is the highest thread count seen across all known workers.
-	MaxThreads   int
+	MaxThreads int
 }
 
 type VerificationSnapshot struct {
@@ -123,6 +123,7 @@ type Scheduler struct {
 	reducer       Reducer
 	state         string
 	startedAt     time.Time
+	finishedAt    time.Time // set once, when all tasks complete; zero while running
 	tasks         map[string]*taskState
 	taskOrder     []string
 	queue         []string
@@ -436,7 +437,11 @@ func (s *Scheduler) Snapshot(now time.Time) Snapshot {
 		Workers:  make([]WorkerSnapshot, 0, len(s.workers)),
 	}
 	if s.state != JobStateWaiting {
-		out.Elapsed = now.Sub(s.startedAt)
+		endTime := now
+		if !s.finishedAt.IsZero() {
+			endTime = s.finishedAt
+		}
+		out.Elapsed = endTime.Sub(s.startedAt)
 		if out.Elapsed < 0 {
 			out.Elapsed = 0
 		}
@@ -474,6 +479,9 @@ func (s *Scheduler) Snapshot(now time.Time) Snapshot {
 	}
 	if s.done == len(s.tasks) && s.verifyPending == 0 {
 		out.State = JobStateDone
+		if s.finishedAt.IsZero() {
+			s.finishedAt = now // freeze the clock on first observation
+		}
 	}
 	return out
 }
